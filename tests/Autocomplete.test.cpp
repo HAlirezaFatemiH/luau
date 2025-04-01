@@ -7,6 +7,8 @@
 #include "Luau/VisitType.h"
 #include "Luau/StringUtils.h"
 
+
+#include "ClassFixture.h"
 #include "Fixture.h"
 #include "ScopedFlags.h"
 
@@ -19,6 +21,9 @@ LUAU_FASTFLAG(LuauSetMetatableDoesNotTimeTravel)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 
 LUAU_FASTFLAG(LuauExposeRequireByStringAutocomplete)
+LUAU_FASTFLAG(LuauAutocompleteUnionCopyPreviousSeen)
+LUAU_FASTFLAG(LuauUserTypeFunTypecheck)
+LUAU_FASTFLAG(LuauTypeFunResultInAutocomplete)
 
 using namespace Luau;
 
@@ -151,6 +156,10 @@ struct ACFixture : ACFixtureImpl<Fixture>
 };
 
 struct ACBuiltinsFixture : ACFixtureImpl<BuiltinsFixture>
+{
+};
+
+struct ACClassFixture : ACFixtureImpl<ClassFixture>
 {
 };
 
@@ -4414,6 +4423,101 @@ local x = 1 + result.
 
     CHECK(ac.entryMap.size() == 1);
     CHECK(ac.entryMap.count("x"));
+}
+
+TEST_CASE_FIXTURE(ACClassFixture, "ac_dont_overflow_on_recursive_union")
+{
+    ScopedFastFlag _{FFlag::LuauAutocompleteUnionCopyPreviousSeen, true};
+    check(R"(
+        local table1: {ChildClass} = {}
+        local table2 = {}
+
+        for index, value in table2[1] do
+            table.insert(table1, value)
+            value.@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    // RIDE-11517: This should *really* be the members of `ChildClass`, but
+    // would previously stack overflow.
+    CHECK(ac.entryMap.empty());
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "type_function_has_types_definitions")
+{
+    // Needs new global initialization in the Fixture, but can't place the flag inside the base Fixture
+    if (!FFlag::LuauUserTypeFunTypecheck)
+        return;
+
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+
+    check(R"(
+type function foo()
+    types.@1
+end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("singleton"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "type_function_private_scope")
+{
+    // Needs new global initialization in the Fixture, but can't place the flag inside the base Fixture
+    if (!FFlag::LuauUserTypeFunTypecheck)
+        return;
+
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+
+    // Global scope polution by the embedder has no effect
+    addGlobalBinding(frontend.globals, "thisAlsoShouldNotBeThere", Binding{builtinTypes->anyType});
+    addGlobalBinding(frontend.globalsForAutocomplete, "thisAlsoShouldNotBeThere", Binding{builtinTypes->anyType});
+
+    check(R"(
+local function thisShouldNotBeThere() end
+
+type function thisShouldBeThere() end
+
+type function foo()
+    this@1
+end
+
+this@2
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("thisShouldNotBeThere"), 0);
+    CHECK_EQ(ac.entryMap.count("thisAlsoShouldNotBeThere"), 0);
+    CHECK_EQ(ac.entryMap.count("thisShouldBeThere"), 1);
+
+    ac = autocomplete('2');
+    CHECK_EQ(ac.entryMap.count("thisShouldNotBeThere"), 1);
+    CHECK_EQ(ac.entryMap.count("thisAlsoShouldNotBeThere"), 1);
+    CHECK_EQ(ac.entryMap.count("thisShouldBeThere"), 0);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "type_function_eval_in_autocomplete")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauTypeFunResultInAutocomplete{FFlag::LuauTypeFunResultInAutocomplete, true};
+
+    check(R"(
+type function foo(x)
+    local tbl = types.newtable(nil, nil, nil)
+    tbl:setproperty(types.singleton("boolean"), x)
+    tbl:setproperty(types.singleton("number"), types.number)
+    return tbl
+end
+
+local function test(a: foo<string>)
+    return a.@1
+end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("boolean"), 1);
+    CHECK_EQ(ac.entryMap.count("number"), 1);
 }
 
 TEST_SUITE_END();

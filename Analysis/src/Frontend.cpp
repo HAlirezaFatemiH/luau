@@ -1,7 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Frontend.h"
 
-#include "Luau/AnyTypeSummary.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
@@ -51,9 +50,8 @@ LUAU_FASTFLAGVARIABLE(LuauModuleHoldsAstRoot)
 
 LUAU_FASTFLAGVARIABLE(LuauFixMultithreadTypecheck)
 
-LUAU_FASTFLAG(StudioReportLuauAny2)
-
 LUAU_FASTFLAGVARIABLE(LuauSelectivelyRetainDFGArena)
+LUAU_FASTFLAG(LuauTypeFunResultInAutocomplete)
 
 namespace Luau
 {
@@ -461,20 +459,6 @@ CheckResult Frontend::check(const ModuleName& name, std::optional<FrontendOption
 
         if (item.name == name)
             checkResult.lintResult = item.module->lintResult;
-
-        if (FFlag::StudioReportLuauAny2 && item.options.retainFullTypeGraphs)
-        {
-            if (item.module)
-            {
-                const SourceModule& sourceModule = *item.sourceModule;
-                if (sourceModule.mode == Luau::Mode::Strict)
-                {
-                    item.module->ats.root = toString(sourceModule.root);
-                }
-                item.module->ats.rootSrc = sourceModule.root;
-                item.module->ats.traverse(item.module.get(), sourceModule.root, NotNull{&builtinTypes_});
-            }
-        }
     }
 
     return checkResult;
@@ -1532,6 +1516,7 @@ ModulePtr check(
     NotNull<ModuleResolver> moduleResolver,
     NotNull<FileResolver> fileResolver,
     const ScopePtr& parentScope,
+    const ScopePtr& typeFunctionScope,
     std::function<void(const ModuleName&, const ScopePtr&)> prepareModuleScope,
     FrontendOptions options,
     TypeCheckLimits limits,
@@ -1548,6 +1533,7 @@ ModulePtr check(
         moduleResolver,
         fileResolver,
         parentScope,
+        typeFunctionScope,
         std::move(prepareModuleScope),
         options,
         limits,
@@ -1609,6 +1595,7 @@ ModulePtr check(
     NotNull<ModuleResolver> moduleResolver,
     NotNull<FileResolver> fileResolver,
     const ScopePtr& parentScope,
+    const ScopePtr& typeFunctionScope,
     std::function<void(const ModuleName&, const ScopePtr&)> prepareModuleScope,
     FrontendOptions options,
     TypeCheckLimits limits,
@@ -1655,7 +1642,7 @@ ModulePtr check(
     SimplifierPtr simplifier = newSimplifier(NotNull{&result->internalTypes}, builtinTypes);
     TypeFunctionRuntime typeFunctionRuntime{iceHandler, NotNull{&limits}};
 
-    typeFunctionRuntime.allowEvaluation = sourceModule.parseErrors.empty();
+    typeFunctionRuntime.allowEvaluation = FFlag::LuauTypeFunResultInAutocomplete || sourceModule.parseErrors.empty();
 
     ConstraintGenerator cg{
         result,
@@ -1666,6 +1653,7 @@ ModulePtr check(
         builtinTypes,
         iceHandler,
         parentScope,
+        typeFunctionScope,
         std::move(prepareModuleScope),
         logger.get(),
         NotNull{&dfg},
@@ -1848,6 +1836,7 @@ ModulePtr Frontend::check(
                 NotNull{forAutocomplete ? &moduleResolverForAutocomplete : &moduleResolver},
                 NotNull{fileResolver},
                 environmentScope ? *environmentScope : globals.globalScope,
+                globals.globalTypeFunctionScope,
                 prepareModuleScopeWrap,
                 options,
                 typeCheckLimits,

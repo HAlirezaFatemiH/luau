@@ -323,6 +323,7 @@ AstStatBlock* Fixture::parse(const std::string& source, const ParseOptions& pars
                     NotNull{&moduleResolver},
                     NotNull{&fileResolver},
                     frontend.globals.globalScope,
+                    frontend.globals.globalTypeFunctionScope,
                     /*prepareModuleScope*/ nullptr,
                     frontend.options,
                     {},
@@ -371,7 +372,7 @@ LintResult Fixture::lint(const std::string& source, const std::optional<LintOpti
     fileResolver.source[mm] = std::move(source);
     frontend.markDirty(mm);
 
-    return lintModule(mm);
+    return lintModule(mm, lintOptions);
 }
 
 LintResult Fixture::lintModule(const ModuleName& moduleName, const std::optional<LintOptions>& lintOptions)

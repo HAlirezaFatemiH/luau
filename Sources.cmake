@@ -171,7 +171,6 @@ endif ()
 # Luau.Analysis Sources
 target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Anyification.h
-    Analysis/include/Luau/AnyTypeSummary.h
     Analysis/include/Luau/ApplyTypeFunction.h
     Analysis/include/Luau/AstJsonEncoder.h
     Analysis/include/Luau/AstQuery.h
@@ -250,7 +249,6 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/VisitType.h
 
     Analysis/src/Anyification.cpp
-    Analysis/src/AnyTypeSummary.cpp
     Analysis/src/ApplyTypeFunction.cpp
     Analysis/src/AstJsonEncoder.cpp
     Analysis/src/AstQuery.cpp
@@ -435,7 +433,6 @@ endif()
 if(TARGET Luau.UnitTest)
     # Luau.UnitTest Sources
     target_sources(Luau.UnitTest PRIVATE
-        tests/AnyTypeSummary.test.cpp
         tests/AssemblyBuilderA64.test.cpp
         tests/AssemblyBuilderX64.test.cpp
         tests/AstJsonEncoder.test.cpp
