@@ -4,7 +4,7 @@ if(EXT_PLATFORM_STRING)
     return()
 endif()
 
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.6)
 
 option(LUAU_BUILD_CLI "Build CLI" ON)
 option(LUAU_BUILD_TESTS "Build tests" ON)
@@ -302,6 +302,7 @@ if(LUAU_BUILD_TESTS)
     endif()
     target_link_libraries(Luau.CLI.Test PRIVATE osthreads)
 
+    add_subdirectory(fuzz)
 endif()
 
 if(LUAU_BUILD_WEB)
@@ -318,8 +319,6 @@ if(LUAU_BUILD_WEB)
     target_link_options(Luau.Web PRIVATE -sSINGLE_FILE=1)
 endif()
 
-add_subdirectory(fuzz)
-
 # validate dependencies for internal libraries
 foreach(LIB Luau.Ast Luau.Compiler Luau.Config Luau.Analysis Luau.EqSat Luau.CodeGen Luau.VM)
     if(TARGET ${LIB})
@@ -335,3 +334,7 @@ foreach(LIB Luau.Ast Luau.Compiler Luau.Config Luau.Analysis Luau.EqSat Luau.Cod
         endif()
     endif()
 endforeach()
+
+setup_target_libs(Luau.Ast)
+setup_target_libs(Luau.Compiler)
+setup_target_libs(Luau.VM)
