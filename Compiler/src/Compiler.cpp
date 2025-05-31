@@ -28,6 +28,9 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
 LUAU_FASTFLAGVARIABLE(LuauSeparateCompilerTypeInfo)
 
+LUAU_FASTFLAG(LuauStoreReturnTypesAsPackOnAst)
+LUAU_FASTFLAGVARIABLE(LuauCompileFixTypeFunctionSkip)
+
 namespace Luau
 {
 
@@ -3931,6 +3934,11 @@ struct Compiler
 
             return false;
         }
+
+        bool visit(AstStatTypeFunction* node) override
+        {
+            return !FFlag::LuauCompileFixTypeFunctionSkip;
+        }
     };
 
     struct UndefinedLocalVisitor : AstVisitor
@@ -4317,26 +4325,54 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, c
             mainFlags |= LPF_NATIVE_FUNCTION;
     }
 
-    AstExprFunction main(
-        root->location,
-        /* attributes= */ AstArray<AstAttr*>({nullptr, 0}),
-        /* generics= */ AstArray<AstGenericType*>(),
-        /* genericPacks= */ AstArray<AstGenericTypePack*>(),
-        /* self= */ nullptr,
-        AstArray<AstLocal*>(),
-        /* vararg= */ true,
-        /* varargLocation= */ Luau::Location(),
-        root,
-        /* functionDepth= */ 0,
-        /* debugname= */ AstName()
-    );
-    uint32_t mainid = compiler.compileFunction(&main, mainFlags);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        AstExprFunction main(
+            root->location,
+            /* attributes= */ AstArray<AstAttr*>({nullptr, 0}),
+            /* generics= */ AstArray<AstGenericType*>(),
+            /* genericPacks= */ AstArray<AstGenericTypePack*>(),
+            /* self= */ nullptr,
+            AstArray<AstLocal*>(),
+            /* vararg= */ true,
+            /* varargLocation= */ Luau::Location(),
+            root,
+            /* functionDepth= */ 0,
+            /* debugname= */ AstName(),
+            /* returnAnnotation= */ nullptr
+        );
+        uint32_t mainid = compiler.compileFunction(&main, mainFlags);
 
-    const Compiler::Function* mainf = compiler.functions.find(&main);
-    LUAU_ASSERT(mainf && mainf->upvals.empty());
+        const Compiler::Function* mainf = compiler.functions.find(&main);
+        LUAU_ASSERT(mainf && mainf->upvals.empty());
 
-    bytecode.setMainFunction(mainid);
-    bytecode.finalize();
+        bytecode.setMainFunction(mainid);
+        bytecode.finalize();
+    }
+    else
+    {
+        AstExprFunction main(
+            root->location,
+            /* attributes= */ AstArray<AstAttr*>({nullptr, 0}),
+            /* generics= */ AstArray<AstGenericType*>(),
+            /* genericPacks= */ AstArray<AstGenericTypePack*>(),
+            /* self= */ nullptr,
+            AstArray<AstLocal*>(),
+            /* vararg= */ true,
+            /* varargLocation= */ Luau::Location(),
+            root,
+            /* functionDepth= */ 0,
+            /* debugname= */ AstName(),
+            /* returnAnnotation= */ std::nullopt
+        );
+        uint32_t mainid = compiler.compileFunction(&main, mainFlags);
+
+        const Compiler::Function* mainf = compiler.functions.find(&main);
+        LUAU_ASSERT(mainf && mainf->upvals.empty());
+
+        bytecode.setMainFunction(mainid);
+        bytecode.finalize();
+    }
 }
 
 void compileOrThrow(BytecodeBuilder& bytecode, const std::string& source, const CompileOptions& options, const ParseOptions& parseOptions)

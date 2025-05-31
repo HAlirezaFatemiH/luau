@@ -3,22 +3,22 @@
 
 #include "Luau/Ast.h"
 #include "Luau/Clone.h"
+#include "Luau/Common.h"
+#include "Luau/ConstraintGenerator.h"
+#include "Luau/ConstraintSolver.h"
 #include "Luau/DenseHash.h"
 #include "Luau/Error.h"
 #include "Luau/Frontend.h"
-#include "Luau/Symbol.h"
-#include "Luau/Common.h"
-#include "Luau/ToString.h"
-#include "Luau/ConstraintSolver.h"
-#include "Luau/ConstraintGenerator.h"
+#include "Luau/InferPolarity.h"
 #include "Luau/NotNull.h"
-#include "Luau/TypeInfer.h"
+#include "Luau/Subtyping.h"
+#include "Luau/Symbol.h"
+#include "Luau/Type.h"
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
+#include "Luau/TypeInfer.h"
 #include "Luau/TypePack.h"
-#include "Luau/Type.h"
 #include "Luau/TypeUtils.h"
-#include "Luau/Subtyping.h"
 
 #include <algorithm>
 
@@ -29,11 +29,11 @@
  */
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAGVARIABLE(LuauStringFormatErrorSuppression)
+LUAU_FASTFLAG(LuauEagerGeneralization2)
 LUAU_FASTFLAGVARIABLE(LuauTableCloneClonesType3)
-LUAU_FASTFLAG(LuauTrackInteriorFreeTypesOnScope)
-LUAU_FASTFLAGVARIABLE(LuauFollowTableFreeze)
-LUAU_FASTFLAGVARIABLE(LuauUserTypeFunTypecheck)
+LUAU_FASTFLAGVARIABLE(LuauMagicFreezeCheckBlocked2)
+LUAU_FASTFLAGVARIABLE(LuauFormatUseLastPosition)
+LUAU_FASTFLAGVARIABLE(LuauUpdateSetMetatableTypeSignature)
 
 namespace Luau
 {
@@ -247,6 +247,7 @@ void addGlobalBinding(GlobalTypes& globals, const ScopePtr& scope, const std::st
 
 void addGlobalBinding(GlobalTypes& globals, const ScopePtr& scope, const std::string& name, Binding binding)
 {
+    inferGenericPolarities(NotNull{&globals.globalTypes}, NotNull{scope.get()}, binding.typeId);
     scope->bindings[globals.globalNames.names->getOrAdd(name.c_str())] = binding;
 }
 
@@ -290,8 +291,6 @@ void assignPropDocumentationSymbols(TableType::Props& props, const std::string& 
 
 static void finalizeGlobalBindings(ScopePtr scope)
 {
-    LUAU_ASSERT(FFlag::LuauUserTypeFunTypecheck);
-
     for (const auto& pair : scope->bindings)
     {
         persist(pair.second.typeId);
@@ -311,6 +310,9 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     TypeArena& arena = globals.globalTypes;
     NotNull<BuiltinTypes> builtinTypes = globals.builtinTypes;
+    Scope* globalScope = nullptr; // NotNull<Scope> when removing FFlag::LuauEagerGeneralization2
+    if (FFlag::LuauEagerGeneralization2)
+        globalScope = globals.globalScope.get();
 
     if (FFlag::LuauSolverV2)
         builtinTypeFunctions().addToScope(NotNull{&arena}, NotNull{globals.globalScope.get()});
@@ -320,8 +322,8 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     );
     LUAU_ASSERT(loadResult.success);
 
-    TypeId genericK = arena.addType(GenericType{"K"});
-    TypeId genericV = arena.addType(GenericType{"V"});
+    TypeId genericK = arena.addType(GenericType{globalScope, "K"});
+    TypeId genericV = arena.addType(GenericType{globalScope, "V"});
     TypeId mapOfKtoV = arena.addType(TableType{{}, TableIndexer(genericK, genericV), globals.globalScope->level, TableState::Generic});
 
     std::optional<TypeId> stringMetatableTy = getMetatable(builtinTypes->stringType, builtinTypes);
@@ -338,7 +340,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     if (auto it = globals.globalScope->exportedTypeBindings.find("vector"); it != globals.globalScope->exportedTypeBindings.end())
     {
         TypeId vectorTy = it->second.type;
-        ClassType* vectorCls = getMutable<ClassType>(vectorTy);
+        ExternType* vectorCls = getMutable<ExternType>(vectorTy);
 
         vectorCls->metatable = arena.addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
         TableType* metatableTy = Luau::getMutable<TableType>(vectorCls->metatable);
@@ -369,7 +371,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     // pairs<K, V>(t: Table<K, V>) -> ((Table<K, V>, K?) -> (K, V), Table<K, V>, nil)
     addGlobalBinding(globals, "pairs", arena.addType(FunctionType{{genericK, genericV}, {}, pairsArgsTypePack, pairsReturnTypePack}), "@luau");
 
-    TypeId genericMT = arena.addType(GenericType{"MT"});
+    TypeId genericMT = arena.addType(GenericType{globalScope, "MT"});
 
     TableType tab{TableState::Generic, globals.globalScope->level};
     TypeId tabTy = arena.addType(tab);
@@ -381,22 +383,33 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     if (FFlag::LuauSolverV2)
     {
-        TypeId genericT = arena.addType(GenericType{"T"});
+        TypeId genericT = arena.addType(GenericType{globalScope, "T"});
         TypeId tMetaMT = arena.addType(MetatableType{genericT, genericMT});
 
-        // clang-format off
-        // setmetatable<T: {}, MT>(T, MT) -> { @metatable MT, T }
-        addGlobalBinding(globals, "setmetatable",
-            arena.addType(
-                FunctionType{
-                    {genericT, genericMT},
-                    {},
-                    arena.addTypePack(TypePack{{genericT, genericMT}}),
-                    arena.addTypePack(TypePack{{tMetaMT}})
-                }
-            ), "@luau"
-        );
-        // clang-format on
+        if (FFlag::LuauUpdateSetMetatableTypeSignature)
+        {
+            // setmetatable<T: {}, MT>(T, MT) -> setmetatable<T, MT>
+            TypeId setmtReturn = arena.addType(TypeFunctionInstanceType{builtinTypeFunctions().setmetatableFunc, {genericT, genericMT}});
+            addGlobalBinding(
+                globals, "setmetatable", makeFunction(arena, std::nullopt, {genericT, genericMT}, {}, {genericT, genericMT}, {setmtReturn}), "@luau"
+            );
+        }
+        else
+        {
+            // clang-format off
+            // setmetatable<T: {}, MT>(T, MT) -> { @metatable MT, T }
+            addGlobalBinding(globals, "setmetatable",
+                arena.addType(
+                    FunctionType{
+                        {genericT, genericMT},
+                        {},
+                        arena.addTypePack(TypePack{{genericT, genericMT}}),
+                        arena.addTypePack(TypePack{{tMetaMT}})
+                    }
+                ), "@luau"
+            );
+            // clang-format on
+        }
     }
     else
     {
@@ -415,30 +428,14 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         // clang-format on
     }
 
-    if (FFlag::LuauUserTypeFunTypecheck)
-    {
-        finalizeGlobalBindings(globals.globalScope);
-    }
-    else
-    {
-        for (const auto& pair : globals.globalScope->bindings)
-        {
-            persist(pair.second.typeId);
-
-            if (TableType* ttv = getMutable<TableType>(pair.second.typeId))
-            {
-                if (!ttv->name)
-                    ttv->name = "typeof(" + toString(pair.first) + ")";
-            }
-        }
-    }
+    finalizeGlobalBindings(globals.globalScope);
 
     attachMagicFunction(getGlobalBinding(globals, "assert"), std::make_shared<MagicAssert>());
 
     if (FFlag::LuauSolverV2)
     {
         // declare function assert<T>(value: T, errorMessage: string?): intersect<T, ~(false?)>
-        TypeId genericT = arena.addType(GenericType{"T"});
+        TypeId genericT = arena.addType(GenericType{globalScope, "T"});
         TypeId refinedTy = arena.addType(TypeFunctionInstanceType{
             NotNull{&builtinTypeFunctions().intersectFunc}, {genericT, arena.addType(NegationType{builtinTypes->falsyType})}, {}
         });
@@ -461,12 +458,16 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
             // the top table type.  We do the best we can by modelling these
             // functions using unconstrained generics.  It's not quite right,
             // but it'll be ok for now.
-            TypeId genericTy = arena.addType(GenericType{"T"});
+            TypeId genericTy = arena.addType(GenericType{globalScope, "T"});
             TypePackId thePack = arena.addTypePack({genericTy});
             TypeId idTyWithMagic = arena.addType(FunctionType{{genericTy}, {}, thePack, thePack});
             ttv->props["freeze"] = makeProperty(idTyWithMagic, "@luau/global/table.freeze");
+            if (globalScope)
+                inferGenericPolarities(NotNull{&globals.globalTypes}, NotNull{globalScope}, idTyWithMagic);
 
             TypeId idTy = arena.addType(FunctionType{{genericTy}, {}, thePack, thePack});
+            if (globalScope)
+                inferGenericPolarities(NotNull{&globals.globalTypes}, NotNull{globalScope}, idTy);
             ttv->props["clone"] = makeProperty(idTy, "@luau/global/table.clone");
         }
         else
@@ -491,58 +492,55 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     attachTag(requireTy, kRequireTagName);
     attachMagicFunction(requireTy, std::make_shared<MagicRequire>());
 
-    if (FFlag::LuauUserTypeFunTypecheck)
+    // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
+    globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;
+    globals.globalTypeFunctionScope->builtinTypeNames = globals.globalScope->builtinTypeNames;
+
+    // Type function runtime also removes a few standard libraries and globals, so we will take only the ones that are defined
+    static const char* typeFunctionRuntimeBindings[] = {
+        // Libraries
+        "math",
+        "table",
+        "string",
+        "bit32",
+        "utf8",
+        "buffer",
+
+        // Globals
+        "assert",
+        "error",
+        "print",
+        "next",
+        "ipairs",
+        "pairs",
+        "select",
+        "unpack",
+        "getmetatable",
+        "setmetatable",
+        "rawget",
+        "rawset",
+        "rawlen",
+        "rawequal",
+        "tonumber",
+        "tostring",
+        "type",
+        "typeof",
+    };
+
+    for (auto& name : typeFunctionRuntimeBindings)
     {
-        // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
-        globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;
-        globals.globalTypeFunctionScope->builtinTypeNames = globals.globalScope->builtinTypeNames;
+        AstName astName = globals.globalNames.names->get(name);
+        LUAU_ASSERT(astName.value);
 
-        // Type function runtime also removes a few standard libraries and globals, so we will take only the ones that are defined
-        static const char* typeFunctionRuntimeBindings[] = {
-            // Libraries
-            "math",
-            "table",
-            "string",
-            "bit32",
-            "utf8",
-            "buffer",
-
-            // Globals
-            "assert",
-            "error",
-            "print",
-            "next",
-            "ipairs",
-            "pairs",
-            "select",
-            "unpack",
-            "getmetatable",
-            "setmetatable",
-            "rawget",
-            "rawset",
-            "rawlen",
-            "rawequal",
-            "tonumber",
-            "tostring",
-            "type",
-            "typeof",
-        };
-
-        for (auto& name : typeFunctionRuntimeBindings)
-        {
-            AstName astName = globals.globalNames.names->get(name);
-            LUAU_ASSERT(astName.value);
-
-            globals.globalTypeFunctionScope->bindings[astName] = globals.globalScope->bindings[astName];
-        }
-
-        LoadDefinitionFileResult typeFunctionLoadResult = frontend.loadDefinitionFile(
-            globals, globals.globalTypeFunctionScope, getTypeFunctionDefinitionSource(), "@luau", /* captureComments */ false, false
-        );
-        LUAU_ASSERT(typeFunctionLoadResult.success);
-
-        finalizeGlobalBindings(globals.globalTypeFunctionScope);
+        globals.globalTypeFunctionScope->bindings[astName] = globals.globalScope->bindings[astName];
     }
+
+    LoadDefinitionFileResult typeFunctionLoadResult = frontend.loadDefinitionFile(
+        globals, globals.globalTypeFunctionScope, getTypeFunctionDefinitionSource(), "@luau", /* captureComments */ false, false
+    );
+    LUAU_ASSERT(typeFunctionLoadResult.success);
+
+    finalizeGlobalBindings(globals.globalTypeFunctionScope);
 }
 
 static std::vector<TypeId> parseFormatString(NotNull<BuiltinTypes> builtinTypes, const char* data, size_t size)
@@ -695,6 +693,14 @@ bool MagicFormat::typeCheck(const MagicFunctionTypeCheckContext& context)
         return true;
     }
 
+    // CLI-150726: The block below effectively constructs a type pack and then type checks it by going parameter-by-parameter.
+    // This does _not_ handle cases like:
+    //
+    //  local foo : () -> (...string) = (nil :: any)
+    //  print(string.format("%s %d %s", foo()))
+    //
+    // ... which should be disallowed.
+
     std::vector<TypeId> expected = parseFormatString(context.builtinTypes, fmt->value.data, fmt->value.size);
     const auto& [params, tail] = flatten(context.arguments);
 
@@ -706,31 +712,26 @@ bool MagicFormat::typeCheck(const MagicFunctionTypeCheckContext& context)
     {
         TypeId actualTy = params[i + paramOffset];
         TypeId expectedTy = expected[i];
-        Location location = context.callSite->args.data[i + (calledWithSelf ? 0 : paramOffset)]->location;
+        Location location =
+            FFlag::LuauFormatUseLastPosition
+                ? context.callSite->args.data[std::min(context.callSite->args.size - 1, i + (calledWithSelf ? 0 : paramOffset))]->location
+                : context.callSite->args.data[i + (calledWithSelf ? 0 : paramOffset)]->location;
         // use subtyping instead here
         SubtypingResult result = context.typechecker->subtyping->isSubtype(actualTy, expectedTy, context.checkScope);
 
         if (!result.isSubtype)
         {
-            if (FFlag::LuauStringFormatErrorSuppression)
+            switch (shouldSuppressErrors(NotNull{&context.typechecker->normalizer}, actualTy))
             {
-                switch (shouldSuppressErrors(NotNull{&context.typechecker->normalizer}, actualTy))
-                {
-                case ErrorSuppression::Suppress:
-                    break;
-                case ErrorSuppression::NormalizationFailed:
-                    break;
-                case ErrorSuppression::DoNotSuppress:
-                    Reasonings reasonings = context.typechecker->explainReasonings(actualTy, expectedTy, location, result);
-
-                    if (!reasonings.suppressed)
-                        context.typechecker->reportError(TypeMismatch{expectedTy, actualTy, reasonings.toString()}, location);
-                }
-            }
-            else
-            {
+            case ErrorSuppression::Suppress:
+                break;
+            case ErrorSuppression::NormalizationFailed:
+                break;
+            case ErrorSuppression::DoNotSuppress:
                 Reasonings reasonings = context.typechecker->explainReasonings(actualTy, expectedTy, location, result);
-                context.typechecker->reportError(TypeMismatch{expectedTy, actualTy, reasonings.toString()}, location);
+
+                if (!reasonings.suppressed)
+                    context.typechecker->reportError(TypeMismatch{expectedTy, actualTy, reasonings.toString()}, location);
             }
         }
     }
@@ -1527,8 +1528,7 @@ bool MagicClone::infer(const MagicFunctionCallContext& context)
         tableType->scope = context.constraint->scope.get();
     }
 
-    if (FFlag::LuauTrackInteriorFreeTypesOnScope)
-        trackInteriorFreeType(context.constraint->scope.get(), resultType);
+    trackInteriorFreeType(context.constraint->scope.get(), resultType);
 
     TypePackId clonedTypePack = arena->addTypePack({resultType});
     asMutable(context.result)->ty.emplace<BoundTypePack>(clonedTypePack);
@@ -1539,8 +1539,7 @@ bool MagicClone::infer(const MagicFunctionCallContext& context)
 static std::optional<TypeId> freezeTable(TypeId inputType, const MagicFunctionCallContext& context)
 {
     TypeArena* arena = context.solver->arena;
-    if (FFlag::LuauFollowTableFreeze)
-        inputType = follow(inputType);
+    inputType = follow(inputType);
     if (auto mt = get<MetatableType>(inputType))
     {
         std::optional<TypeId> frozenTable = freezeTable(mt->table, context);
@@ -1607,8 +1606,21 @@ bool MagicFreeze::infer(const MagicFunctionCallContext& context)
     std::optional<DefId> resultDef = dfg->getDefOptional(targetExpr);
     std::optional<TypeId> resultTy = resultDef ? scope->lookup(*resultDef) : std::nullopt;
 
+    if (FFlag::LuauMagicFreezeCheckBlocked2)
+    {
+        if (resultTy && !get<BlockedType>(follow(resultTy)))
+        {
+            // If there's an existing result type, but it's _not_ blocked, then
+            // we aren't type stating this builtin and should fall back to
+            // regular inference.
+            return false;
+        }
+    }
+
     std::optional<TypeId> frozenType = freezeTable(inputType, context);
 
+    // At this point: we know for sure that if `resultTy` exists, it is a
+    // blocked type, and can safely emplace it.
     if (!frozenType)
     {
         if (resultTy)

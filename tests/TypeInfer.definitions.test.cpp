@@ -10,7 +10,7 @@
 using namespace Luau;
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
-LUAU_FASTFLAG(LuauDontForgetToReduceUnionFunc)
+LUAU_FASTFLAG(LuauSimplifyOutOfLine)
 
 TEST_SUITE_BEGIN("DefinitionTests");
 
@@ -112,7 +112,7 @@ TEST_CASE_FIXTURE(Fixture, "load_definition_file_errors_do_not_pollute_global_sc
     CHECK(!barTy.has_value());
 }
 
-TEST_CASE_FIXTURE(Fixture, "definition_file_classes")
+TEST_CASE_FIXTURE(Fixture, "definition_file_extern_types")
 {
     loadDefinition(R"(
         declare class Foo
@@ -202,7 +202,7 @@ TEST_CASE_FIXTURE(Fixture, "class_definitions_cannot_extend_non_class")
     CHECK_EQ("Cannot use non-class type 'NotAClass' as a superclass of class 'Foo'", ge->message);
 }
 
-TEST_CASE_FIXTURE(Fixture, "no_cyclic_defined_classes")
+TEST_CASE_FIXTURE(Fixture, "no_cyclic_defined_extern_types")
 {
     unfreeze(frontend.globals.globalTypes);
     LoadDefinitionFileResult result = frontend.loadDefinitionFile(
@@ -330,7 +330,7 @@ TEST_CASE_FIXTURE(Fixture, "definitions_documentation_symbols")
     REQUIRE(bool(barTy));
     CHECK_EQ(barTy->type->documentationSymbol, "@test/globaltype/Bar");
 
-    ClassType* barClass = getMutable<ClassType>(barTy->type);
+    ExternType* barClass = getMutable<ExternType>(barTy->type);
     REQUIRE(bool(barClass));
     REQUIRE_EQ(barClass->props.count("prop"), 1);
     CHECK_EQ(barClass->props["prop"].documentationSymbol, "@test/globaltype/Bar.prop");
@@ -359,7 +359,7 @@ TEST_CASE_FIXTURE(Fixture, "definitions_symbols_are_generated_for_recursively_re
     REQUIRE(bool(myClassTy));
     CHECK_EQ(myClassTy->type->documentationSymbol, "@test/globaltype/MyClass");
 
-    ClassType* cls = getMutable<ClassType>(myClassTy->type);
+    ExternType* cls = getMutable<ExternType>(myClassTy->type);
     REQUIRE(bool(cls));
     REQUIRE_EQ(cls->props.count("myMethod"), 1);
 
@@ -482,18 +482,18 @@ TEST_CASE_FIXTURE(Fixture, "class_definition_indexer")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    const ClassType* ctv = get<ClassType>(requireType("x"));
-    REQUIRE(ctv != nullptr);
+    const ExternType* etv = get<ExternType>(requireType("x"));
+    REQUIRE(etv != nullptr);
 
-    REQUIRE(bool(ctv->indexer));
+    REQUIRE(bool(etv->indexer));
 
-    CHECK_EQ(*ctv->indexer->indexType, *builtinTypes->numberType);
-    CHECK_EQ(*ctv->indexer->indexResultType, *builtinTypes->stringType);
+    CHECK_EQ(*etv->indexer->indexType, *builtinTypes->numberType);
+    CHECK_EQ(*etv->indexer->indexResultType, *builtinTypes->stringType);
 
     CHECK_EQ(toString(requireType("y")), "string");
 }
 
-TEST_CASE_FIXTURE(Fixture, "class_definitions_reference_other_classes")
+TEST_CASE_FIXTURE(Fixture, "class_definitions_reference_other_extern_types")
 {
     loadDefinition(R"(
         declare class Channel
@@ -535,10 +535,10 @@ TEST_CASE_FIXTURE(Fixture, "definition_file_has_source_module_name_set")
     std::optional<TypeFun> fooTy = frontend.globals.globalScope->lookupType("Foo");
     REQUIRE(fooTy);
 
-    const ClassType* ctv = get<ClassType>(fooTy->type);
+    const ExternType* etv = get<ExternType>(fooTy->type);
 
-    REQUIRE(ctv);
-    CHECK_EQ(ctv->definitionModuleName, "@test");
+    REQUIRE(etv);
+    CHECK_EQ(etv->definitionModuleName, "@test");
 }
 
 TEST_CASE_FIXTURE(Fixture, "recursive_redefinition_reduces_rightfully")
@@ -558,7 +558,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cli_142285_reduce_minted_union_func")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauDontForgetToReduceUnionFunc, true}
+        {FFlag::LuauSimplifyOutOfLine, true},
     };
 
     CheckResult result = check(R"(
@@ -579,10 +579,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cli_142285_reduce_minted_union_func")
         return nil
         end
     )");
-    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
     // There are three errors in the above snippet, but they should all be where
     // clause needed errors.
-    for (const auto& e: result.errors)
+    for (const auto& e : result.errors)
         CHECK(get<WhereClauseNeeded>(e));
 }
 

@@ -13,103 +13,11 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/Unifier2.h"
 
-LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceUpcast)
-LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceCollectIndexerTypes)
-LUAU_FASTFLAGVARIABLE(LuauBidirectionalFailsafe)
+LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceElideAssert)
+LUAU_FASTFLAG(LuauTableLiteralSubtypeSpecificCheck)
 
 namespace Luau
 {
-
-// A fast approximation of subTy <: superTy
-static bool fastIsSubtype(TypeId subTy, TypeId superTy)
-{
-    Relation r = relate(superTy, subTy);
-    return r == Relation::Coincident || r == Relation::Superset;
-}
-
-static bool isRecord(const AstExprTable::Item& item)
-{
-    if (item.kind == AstExprTable::Item::Record)
-        return true;
-    else if (item.kind == AstExprTable::Item::General && item.key->is<AstExprConstantString>())
-        return true;
-    else
-        return false;
-}
-
-static std::optional<TypeId> extractMatchingTableType(std::vector<TypeId>& tables, TypeId exprType, NotNull<BuiltinTypes> builtinTypes)
-{
-    if (tables.empty())
-        return std::nullopt;
-
-    const TableType* exprTable = get<TableType>(follow(exprType));
-    if (!exprTable)
-        return std::nullopt;
-
-    size_t tableCount = 0;
-    std::optional<TypeId> firstTable;
-
-    for (TypeId ty : tables)
-    {
-        ty = follow(ty);
-        if (auto tt = get<TableType>(ty))
-        {
-            // If the expected table has a key whose type is a string or boolean
-            // singleton and the corresponding exprType property does not match,
-            // then skip this table.
-
-            if (!firstTable)
-                firstTable = ty;
-            ++tableCount;
-
-            for (const auto& [name, expectedProp] : tt->props)
-            {
-                if (!expectedProp.readTy)
-                    continue;
-
-                const TypeId expectedType = follow(*expectedProp.readTy);
-
-                auto st = get<SingletonType>(expectedType);
-                if (!st)
-                    continue;
-
-                auto it = exprTable->props.find(name);
-                if (it == exprTable->props.end())
-                    continue;
-
-                const auto& [_name, exprProp] = *it;
-
-                if (!exprProp.readTy)
-                    continue;
-
-                const TypeId propType = follow(*exprProp.readTy);
-
-                const FreeType* ft = get<FreeType>(propType);
-
-                if (ft && get<SingletonType>(ft->lowerBound))
-                {
-                    if (fastIsSubtype(builtinTypes->booleanType, ft->upperBound) && fastIsSubtype(expectedType, builtinTypes->booleanType))
-                    {
-                        return ty;
-                    }
-
-                    if (fastIsSubtype(builtinTypes->stringType, ft->upperBound) && fastIsSubtype(expectedType, ft->lowerBound))
-                    {
-                        return ty;
-                    }
-                }
-            }
-        }
-    }
-
-    if (tableCount == 1)
-    {
-        LUAU_ASSERT(firstTable);
-        return firstTable;
-    }
-
-    return std::nullopt;
-}
 
 TypeId matchLiteralType(
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes,
@@ -141,34 +49,20 @@ TypeId matchLiteralType(
 
     if (!isLiteral(expr))
     {
-        if (FFlag::LuauBidirectionalInferenceUpcast)
-        {
-            auto result = subtyping->isSubtype(/*subTy=*/exprType, /*superTy=*/expectedType, unifier->scope);
-            return result.isSubtype ? expectedType : exprType;
-        }
-        else
-            return exprType;
+        auto result = subtyping->isSubtype(/*subTy=*/exprType, /*superTy=*/expectedType, unifier->scope);
+        return result.isSubtype ? expectedType : exprType;
     }
 
     expectedType = follow(expectedType);
     exprType = follow(exprType);
 
-    if (FFlag::LuauBidirectionalInferenceCollectIndexerTypes)
-    {
-        // The intent of `matchLiteralType` is to upcast values when it's safe
-        // to do so. it's always safe to upcast to `any` or `unknown`, so we
-        // can unconditionally do so here.
-        if (is<AnyType, UnknownType>(expectedType))
-            return expectedType;
-    }
-    else
-    {
-        if (get<AnyType>(expectedType) || get<UnknownType>(expectedType))
-        {
-            // "Narrowing" to unknown or any is not going to do anything useful.
-            return exprType;
-        }
-    }
+
+    // The intent of `matchLiteralType` is to upcast values when it's safe
+    // to do so. it's always safe to upcast to `any` or `unknown`, so we
+    // can unconditionally do so here.
+    if (is<AnyType, UnknownType>(expectedType))
+        return expectedType;
+
 
 
     if (expr->is<AstExprConstantString>())
@@ -238,14 +132,12 @@ TypeId matchLiteralType(
     }
 
 
-    if (FFlag::LuauBidirectionalInferenceUpcast && expr->is<AstExprFunction>())
+    if (expr->is<AstExprFunction>())
     {
-        // TODO: Push argument / return types into the lambda. For now, just do 
+        // TODO: Push argument / return types into the lambda. For now, just do
         // the non-literal thing: check for a subtype and upcast if valid.
         auto result = subtyping->isSubtype(/*subTy=*/exprType, /*superTy=*/expectedType, unifier->scope);
-        return result.isSubtype 
-            ? expectedType
-            : exprType;
+        return result.isSubtype ? expectedType : exprType;
     }
 
     if (auto exprTable = expr->as<AstExprTable>())
@@ -257,7 +149,7 @@ TypeId matchLiteralType(
         //  { x = {}, x = 42 }
         //
         // The type of this will be `{ x: number }`
-        if (FFlag::LuauBidirectionalFailsafe && !tableTy)
+        if (!tableTy)
             return exprType;
 
         LUAU_ASSERT(tableTy);
@@ -275,7 +167,6 @@ TypeId matchLiteralType(
                 if (tt)
                 {
                     TypeId res = matchLiteralType(astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *tt, exprType, expr, toBlock);
-
                     parts.push_back(res);
                     return arena->addType(UnionType{std::move(parts)});
                 }
@@ -298,7 +189,7 @@ TypeId matchLiteralType(
                 auto it = tableTy->props.find(keyStr);
 
                 // This can occur, potentially, if we are re-entrant.
-                if (FFlag::LuauBidirectionalFailsafe && it == tableTy->props.end())
+                if (it == tableTy->props.end())
                     continue;
 
                 LUAU_ASSERT(it != tableTy->props.end());
@@ -337,21 +228,10 @@ TypeId matchLiteralType(
                             toBlock
                         );
 
-                        if (FFlag::LuauBidirectionalInferenceCollectIndexerTypes)
-                        {
-                            indexerKeyTypes.insert(arena->addType(SingletonType{StringSingleton{keyStr}}));
-                            indexerValueTypes.insert(matchedType);
-                        }
-                        else
-                        {
-                            if (tableTy->indexer)
-                                unifier->unify(matchedType, tableTy->indexer->indexResultType);
-                            else
-                                tableTy->indexer = TableIndexer{expectedTableTy->indexer->indexType, matchedType};
-                        }
+                        indexerKeyTypes.insert(arena->addType(SingletonType{StringSingleton{keyStr}}));
+                        indexerValueTypes.insert(matchedType);
 
                         keysToDelete.insert(item.key->as<AstExprConstantString>());
-
                     }
 
                     // If it's just an extra property and the expected type
@@ -374,22 +254,25 @@ TypeId matchLiteralType(
                 // quadratic in a hurry.
                 if (expectedProp.isShared())
                 {
-                    matchedType =
-                        matchLiteralType(astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *expectedReadTy, propTy, item.value, toBlock);
+                    matchedType = matchLiteralType(
+                        astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *expectedReadTy, propTy, item.value, toBlock
+                    );
                     prop.readTy = matchedType;
                     prop.writeTy = matchedType;
                 }
                 else if (expectedReadTy)
                 {
-                    matchedType =
-                        matchLiteralType(astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *expectedReadTy, propTy, item.value, toBlock);
+                    matchedType = matchLiteralType(
+                        astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *expectedReadTy, propTy, item.value, toBlock
+                    );
                     prop.readTy = matchedType;
                     prop.writeTy.reset();
                 }
                 else if (expectedWriteTy)
                 {
-                    matchedType =
-                        matchLiteralType(astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *expectedWriteTy, propTy, item.value, toBlock);
+                    matchedType = matchLiteralType(
+                        astTypes, astExpectedTypes, builtinTypes, arena, unifier, subtyping, *expectedWriteTy, propTy, item.value, toBlock
+                    );
                     prop.readTy.reset();
                     prop.writeTy = matchedType;
                 }
@@ -414,7 +297,8 @@ TypeId matchLiteralType(
             }
             else if (item.kind == AstExprTable::Item::List)
             {
-                LUAU_ASSERT(tableTy->indexer);
+                if (!FFlag::LuauBidirectionalInferenceElideAssert)
+                    LUAU_ASSERT(tableTy->indexer);
 
                 if (expectedTableTy->indexer)
                 {
@@ -435,18 +319,8 @@ TypeId matchLiteralType(
                         toBlock
                     );
 
-                    if (FFlag::LuauBidirectionalInferenceCollectIndexerTypes)
-                    {
-                        indexerKeyTypes.insert(builtinTypes->numberType);
-                        indexerValueTypes.insert(matchedType);
-                    }
-                    else
-                    {
-                        // if the index result type is the prop type, we can replace it with the matched type here.
-                        if (tableTy->indexer->indexResultType == *propTy)
-                            tableTy->indexer->indexResultType = matchedType;
-                    }
-
+                    indexerKeyTypes.insert(builtinTypes->numberType);
+                    indexerValueTypes.insert(matchedType);
                 }
             }
             else if (item.kind == AstExprTable::Item::General)
@@ -469,12 +343,8 @@ TypeId matchLiteralType(
                 if (!item.key->as<AstExprConstantString>() && expectedTableTy->indexer)
                     (*astExpectedTypes)[item.key] = expectedTableTy->indexer->indexType;
 
-                if (FFlag::LuauBidirectionalInferenceCollectIndexerTypes)
-                {
-                    indexerKeyTypes.insert(tKey);
-                    indexerValueTypes.insert(tProp);
-                }
-
+                indexerKeyTypes.insert(tKey);
+                indexerValueTypes.insert(tProp);
             }
             else
                 LUAU_ASSERT(!"Unexpected");
@@ -536,18 +406,18 @@ TypeId matchLiteralType(
         // have one too.
         // TODO: If the expected table also has an indexer, we might want to
         // push the expected indexer's types into it.
-        if (FFlag::LuauBidirectionalInferenceCollectIndexerTypes && expectedTableTy->indexer)
+        if (expectedTableTy->indexer)
         {
             if (indexerValueTypes.size() > 0 && indexerKeyTypes.size() > 0)
             {
                 TypeId inferredKeyType = builtinTypes->neverType;
                 TypeId inferredValueType = builtinTypes->neverType;
-                for (auto kt: indexerKeyTypes)
+                for (auto kt : indexerKeyTypes)
                 {
                     auto simplified = simplifyUnion(builtinTypes, arena, inferredKeyType, kt);
                     inferredKeyType = simplified.result;
                 }
-                for (auto vt: indexerValueTypes)
+                for (auto vt : indexerValueTypes)
                 {
                     auto simplified = simplifyUnion(builtinTypes, arena, inferredValueType, vt);
                     inferredValueType = simplified.result;

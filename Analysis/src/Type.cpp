@@ -27,7 +27,6 @@ LUAU_FASTINTVARIABLE(LuauTypeMaximumStringifierLength, 500)
 LUAU_FASTINTVARIABLE(LuauTableTypeMaximumStringifierLength, 0)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
-LUAU_FASTFLAGVARIABLE(LuauFreeTypesMustHaveBounds)
 
 namespace Luau
 {
@@ -282,8 +281,8 @@ std::optional<TypeId> getMetatable(TypeId type, NotNull<BuiltinTypes> builtinTyp
 
     if (const MetatableType* mtType = get<MetatableType>(type))
         return mtType->metatable;
-    else if (const ClassType* classType = get<ClassType>(type))
-        return classType->metatable;
+    else if (const ExternType* externType = get<ExternType>(type))
+        return externType->metatable;
     else if (isString(type))
     {
         auto ptv = get<PrimitiveType>(builtinTypes->stringType);
@@ -346,10 +345,10 @@ std::optional<ModuleName> getDefinitionModuleName(TypeId type)
         if (ftv->definition)
             return ftv->definition->definitionModuleName;
     }
-    else if (auto ctv = get<ClassType>(type))
+    else if (auto etv = get<ExternType>(type))
     {
-        if (!ctv->definitionModuleName.empty())
-            return ctv->definitionModuleName;
+        if (!etv->definitionModuleName.empty())
+            return etv->definitionModuleName;
     }
 
     return std::nullopt;
@@ -488,11 +487,12 @@ FreeType::FreeType(TypeLevel level, TypeId lowerBound, TypeId upperBound)
 {
 }
 
-FreeType::FreeType(Scope* scope, TypeId lowerBound, TypeId upperBound)
+FreeType::FreeType(Scope* scope, TypeId lowerBound, TypeId upperBound, Polarity polarity)
     : index(Unifiable::freshIndex())
     , scope(scope)
     , lowerBound(lowerBound)
     , upperBound(upperBound)
+    , polarity(polarity)
 {
 }
 
@@ -503,31 +503,6 @@ FreeType::FreeType(Scope* scope, TypeLevel level, TypeId lowerBound, TypeId uppe
     , lowerBound(lowerBound)
     , upperBound(upperBound)
 {
-}
-
-// Old constructors
-FreeType::FreeType(TypeLevel level)
-    : index(Unifiable::freshIndex())
-    , level(level)
-    , scope(nullptr)
-{
-    LUAU_ASSERT(!FFlag::LuauFreeTypesMustHaveBounds);
-}
-
-FreeType::FreeType(Scope* scope)
-    : index(Unifiable::freshIndex())
-    , level{}
-    , scope(scope)
-{
-    LUAU_ASSERT(!FFlag::LuauFreeTypesMustHaveBounds);
-}
-
-FreeType::FreeType(Scope* scope, TypeLevel level)
-    : index(Unifiable::freshIndex())
-    , level(level)
-    , scope(scope)
-{
-    LUAU_ASSERT(!FFlag::LuauFreeTypesMustHaveBounds);
 }
 
 GenericType::GenericType()
@@ -543,16 +518,18 @@ GenericType::GenericType(TypeLevel level)
 {
 }
 
-GenericType::GenericType(const Name& name)
+GenericType::GenericType(const Name& name, Polarity polarity)
     : index(Unifiable::freshIndex())
     , name(name)
     , explicitName(true)
+    , polarity(polarity)
 {
 }
 
-GenericType::GenericType(Scope* scope)
+GenericType::GenericType(Scope* scope, Polarity polarity)
     : index(Unifiable::freshIndex())
     , scope(scope)
+    , polarity(polarity)
 {
 }
 
@@ -631,23 +608,6 @@ FunctionType::FunctionType(TypeLevel level, TypePackId argTypes, TypePackId retT
 }
 
 FunctionType::FunctionType(
-    TypeLevel level,
-    Scope* scope,
-    TypePackId argTypes,
-    TypePackId retTypes,
-    std::optional<FunctionDefinition> defn,
-    bool hasSelf
-)
-    : definition(std::move(defn))
-    , level(level)
-    , scope(scope)
-    , argTypes(argTypes)
-    , retTypes(retTypes)
-    , hasSelf(hasSelf)
-{
-}
-
-FunctionType::FunctionType(
     std::vector<TypeId> generics,
     std::vector<TypePackId> genericPacks,
     TypePackId argTypes,
@@ -677,27 +637,6 @@ FunctionType::FunctionType(
     , generics(generics)
     , genericPacks(genericPacks)
     , level(level)
-    , argTypes(argTypes)
-    , retTypes(retTypes)
-    , hasSelf(hasSelf)
-{
-}
-
-FunctionType::FunctionType(
-    TypeLevel level,
-    Scope* scope,
-    std::vector<TypeId> generics,
-    std::vector<TypePackId> genericPacks,
-    TypePackId argTypes,
-    TypePackId retTypes,
-    std::optional<FunctionDefinition> defn,
-    bool hasSelf
-)
-    : definition(std::move(defn))
-    , generics(generics)
-    , genericPacks(genericPacks)
-    , level(level)
-    , scope(scope)
     , argTypes(argTypes)
     , retTypes(retTypes)
     , hasSelf(hasSelf)
@@ -1049,7 +988,7 @@ BuiltinTypes::BuiltinTypes()
     , threadType(arena->addType(Type{PrimitiveType{PrimitiveType::Thread}, /*persistent*/ true}))
     , bufferType(arena->addType(Type{PrimitiveType{PrimitiveType::Buffer}, /*persistent*/ true}))
     , functionType(arena->addType(Type{PrimitiveType{PrimitiveType::Function}, /*persistent*/ true}))
-    , classType(arena->addType(Type{ClassType{"class", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
+    , externType(arena->addType(Type{ExternType{"class", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , tableType(arena->addType(Type{PrimitiveType{PrimitiveType::Table}, /*persistent*/ true}))
     , emptyTableType(arena->addType(Type{TableType{TableState::Sealed, TypeLevel{}, nullptr}, /*persistent*/ true}))
     , trueType(arena->addType(Type{SingletonType{BooleanSingleton{true}}, /*persistent*/ true}))
@@ -1061,6 +1000,7 @@ BuiltinTypes::BuiltinTypes()
     , noRefineType(arena->addType(Type{NoRefineType{}, /*persistent*/ true}))
     , falsyType(arena->addType(Type{UnionType{{falseType, nilType}}, /*persistent*/ true}))
     , truthyType(arena->addType(Type{NegationType{falsyType}, /*persistent*/ true}))
+    , notNilType(arena->addType(Type{NegationType{nilType}, /*persistent*/ true}))
     , optionalNumberType(arena->addType(Type{UnionType{{numberType, nilType}}, /*persistent*/ true}))
     , optionalStringType(arena->addType(Type{UnionType{{stringType, nilType}}, /*persistent*/ true}))
     , emptyTypePack(arena->addTypePack(TypePackVar{TypePack{{}}, /*persistent*/ true}))
@@ -1139,9 +1079,9 @@ void persist(TypeId ty)
                 queue.push_back(ttv->indexer->indexResultType);
             }
         }
-        else if (auto ctv = get<ClassType>(t))
+        else if (auto etv = get<ExternType>(t))
         {
-            for (const auto& [_name, prop] : ctv->props)
+            for (const auto& [_name, prop] : etv->props)
                 queue.push_back(prop.type());
         }
         else if (auto utv = get<UnionType>(t))
@@ -1241,7 +1181,7 @@ std::optional<TypeLevel> getLevel(TypePackId tp)
         return std::nullopt;
 }
 
-const Property* lookupClassProp(const ClassType* cls, const Name& name)
+const Property* lookupExternTypeProp(const ExternType* cls, const Name& name)
 {
     while (cls)
     {
@@ -1250,7 +1190,7 @@ const Property* lookupClassProp(const ClassType* cls, const Name& name)
             return &it->second;
 
         if (cls->parent)
-            cls = get<ClassType>(*cls->parent);
+            cls = get<ExternType>(*cls->parent);
         else
             return nullptr;
 
@@ -1260,7 +1200,7 @@ const Property* lookupClassProp(const ClassType* cls, const Name& name)
     return nullptr;
 }
 
-bool isSubclass(const ClassType* cls, const ClassType* parent)
+bool isSubclass(const ExternType* cls, const ExternType* parent)
 {
     while (cls)
     {
@@ -1269,7 +1209,7 @@ bool isSubclass(const ClassType* cls, const ClassType* parent)
         else if (!cls->parent)
             return false;
 
-        cls = get<ClassType>(*cls->parent);
+        cls = get<ExternType>(*cls->parent);
         LUAU_ASSERT(cls);
     }
 
@@ -1306,9 +1246,9 @@ IntersectionTypeIterator end(const IntersectionType* itv)
     return IntersectionTypeIterator{};
 }
 
-TypeId freshType(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes, Scope* scope)
+TypeId freshType(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes, Scope* scope, Polarity polarity)
 {
-    return arena->addType(FreeType{scope, builtinTypes->neverType, builtinTypes->unknownType});
+    return arena->addType(FreeType{scope, builtinTypes->neverType, builtinTypes->unknownType, polarity});
 }
 
 std::vector<TypeId> filterMap(TypeId type, TypeIdPredicate predicate)
@@ -1338,8 +1278,8 @@ static Tags* getTags(TypeId ty)
         return &ftv->tags;
     else if (auto ttv = getMutable<TableType>(ty))
         return &ttv->tags;
-    else if (auto ctv = getMutable<ClassType>(ty))
-        return &ctv->tags;
+    else if (auto etv = getMutable<ExternType>(ty))
+        return &etv->tags;
 
     return nullptr;
 }
@@ -1369,19 +1309,19 @@ bool hasTag(TypeId ty, const std::string& tagName)
 {
     ty = follow(ty);
 
-    // We special case classes because getTags only returns a pointer to one vector of tags.
-    // But classes has multiple vector of tags, represented throughout the hierarchy.
-    if (auto ctv = get<ClassType>(ty))
+    // We special case extern types because getTags only returns a pointer to one vector of tags.
+    // But extern types has multiple vector of tags, represented throughout the hierarchy.
+    if (auto etv = get<ExternType>(ty))
     {
-        while (ctv)
+        while (etv)
         {
-            if (hasTag(ctv->tags, tagName))
+            if (hasTag(etv->tags, tagName))
                 return true;
-            else if (!ctv->parent)
+            else if (!etv->parent)
                 return false;
 
-            ctv = get<ClassType>(*ctv->parent);
-            LUAU_ASSERT(ctv);
+            etv = get<ExternType>(*etv->parent);
+            LUAU_ASSERT(etv);
         }
     }
     else if (auto tags = getTags(ty))

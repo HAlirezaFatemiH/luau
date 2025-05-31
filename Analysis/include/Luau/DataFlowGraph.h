@@ -129,8 +129,8 @@ private:
 
     /// A stack of scopes used by the visitor to see where we are.
     ScopeStack scopeStack;
-
-    DfgScope* currentScope();
+    NotNull<DfgScope> currentScope();
+    DfgScope* currentScope_DEPRECATED();
 
     struct FunctionCapture
     {
@@ -148,8 +148,8 @@ private:
     void joinBindings(DfgScope* p, const DfgScope& a, const DfgScope& b);
     void joinProps(DfgScope* p, const DfgScope& a, const DfgScope& b);
 
-    DefId lookup(Symbol symbol);
-    DefId lookup(DefId def, const std::string& key);
+    DefId lookup(Symbol symbol, Location location);
+    DefId lookup(DefId def, const std::string& key, Location location);
 
     ControlFlow visit(AstStatBlock* b);
     ControlFlow visitBlockWithoutChildScope(AstStatBlock* b);
@@ -173,7 +173,7 @@ private:
     ControlFlow visit(AstStatTypeFunction* f);
     ControlFlow visit(AstStatDeclareGlobal* d);
     ControlFlow visit(AstStatDeclareFunction* d);
-    ControlFlow visit(AstStatDeclareClass* d);
+    ControlFlow visit(AstStatDeclareExternType* d);
     ControlFlow visit(AstStatError* error);
 
     DataFlowResult visitExpr(AstExpr* e);

@@ -12,9 +12,6 @@ LUAU_FASTFLAG(LuauSolverV2)
 
 // For each `Luau::clone` call, we will clone only up to N amount of types _and_ packs, as controlled by this limit.
 LUAU_FASTINTVARIABLE(LuauTypeCloneIterationLimit, 100'000)
-LUAU_FASTFLAGVARIABLE(LuauClonedTableAndFunctionTypesMustHaveScopes)
-LUAU_FASTFLAGVARIABLE(LuauDoNotClonePersistentBindings)
-LUAU_FASTFLAG(LuauIncrementalAutocompleteDemandBasedCloning)
 namespace Luau
 {
 
@@ -179,8 +176,6 @@ public:
             generic->scope = nullptr;
         else if (auto free = getMutable<FreeType>(target))
             free->scope = nullptr;
-        else if (auto fn = getMutable<FunctionType>(target))
-            fn->scope = nullptr;
         else if (auto table = getMutable<TableType>(target))
             table->scope = nullptr;
 
@@ -357,7 +352,7 @@ private:
         t->metatable = shallowClone(t->metatable);
     }
 
-    void cloneChildren(ClassType* t)
+    void cloneChildren(ExternType* t)
     {
         for (auto& [_, p] : t->props)
             p = shallowClone(p);
@@ -517,15 +512,7 @@ public:
             free->scope = replacementForNullScope;
         }
         else if (auto tt = getMutable<TableType>(target))
-        {
-            if (FFlag::LuauClonedTableAndFunctionTypesMustHaveScopes)
-                tt->scope = replacementForNullScope;
-        }
-        else if (auto fn = getMutable<FunctionType>(target))
-        {
-            if (FFlag::LuauClonedTableAndFunctionTypesMustHaveScopes)
-                fn->scope = replacementForNullScope;
-        }
+            tt->scope = replacementForNullScope;
 
         (*types)[ty] = target;
         queue.emplace_back(target);
@@ -556,11 +543,6 @@ public:
     void cloneChildren(LazyType* t) override
     {
         // Do not clone lazy types
-        if (!FFlag::LuauIncrementalAutocompleteDemandBasedCloning)
-        {
-            if (auto unwrapped = t->unwrapped.load())
-                t->unwrapped.store(shallowClone(unwrapped));
-        }
     }
 };
 
@@ -746,7 +728,7 @@ Binding cloneIncremental(const Binding& binding, TypeArena& dest, CloneState& cl
     b.deprecatedSuggestion = binding.deprecatedSuggestion;
     b.documentationSymbol = binding.documentationSymbol;
     b.location = binding.location;
-    b.typeId = FFlag::LuauDoNotClonePersistentBindings && binding.typeId->persistent ? binding.typeId : cloner.clone(binding.typeId);
+    b.typeId = binding.typeId->persistent ? binding.typeId : cloner.clone(binding.typeId);
 
     return b;
 }

@@ -11,8 +11,8 @@ using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauTableCloneClonesType3)
-LUAU_FASTFLAG(LuauStringFormatErrorSuppression)
-LUAU_FASTFLAG(LuauImproveTypePathsInErrors)
+LUAU_FASTFLAG(LuauEagerGeneralization2)
+LUAU_FASTFLAG(LuauArityMismatchOnUndersaturatedUnknownArguments)
 
 TEST_SUITE_BEGIN("BuiltinTests");
 
@@ -146,32 +146,19 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "sort_with_bad_predicate")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = (FFlag::LuauImproveTypePathsInErrors) ? "Type\n\t"
-                                                                         "'(number, number) -> boolean'"
-                                                                         "\ncould not be converted into\n\t"
-                                                                         "'((string, string) -> boolean)?'"
-                                                                         "\ncaused by:\n"
-                                                                         "  None of the union options are compatible. For example:\n"
-                                                                         "Type\n\t"
-                                                                         "'(number, number) -> boolean'"
-                                                                         "\ncould not be converted into\n\t"
-                                                                         "'(string, string) -> boolean'"
-                                                                         "\ncaused by:\n"
-                                                                         "  Argument #1 type is not compatible.\n"
-                                                                         "Type 'string' could not be converted into 'number'"
-                                                                       : R"(Type
-    '(number, number) -> boolean'
-could not be converted into
-    '((string, string) -> boolean)?'
-caused by:
-  None of the union options are compatible. For example:
-Type
-    '(number, number) -> boolean'
-could not be converted into
-    '(string, string) -> boolean'
-caused by:
-  Argument #1 type is not compatible.
-Type 'string' could not be converted into 'number')";
+    const std::string expected = "Type\n\t"
+                                 "'(number, number) -> boolean'"
+                                 "\ncould not be converted into\n\t"
+                                 "'((string, string) -> boolean)?'"
+                                 "\ncaused by:\n"
+                                 "  None of the union options are compatible. For example:\n"
+                                 "Type\n\t"
+                                 "'(number, number) -> boolean'"
+                                 "\ncould not be converted into\n\t"
+                                 "'(string, string) -> boolean'"
+                                 "\ncaused by:\n"
+                                 "  Argument #1 type is not compatible.\n"
+                                 "Type 'string' could not be converted into 'number'";
     CHECK_EQ(expected, toString(result.errors[0]));
 }
 
@@ -472,7 +459,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_pack_reduce")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    if (FFlag::LuauSolverV2)
+    if (FFlag::LuauSolverV2 && FFlag::LuauEagerGeneralization2)
+        CHECK("{ [number]: string | string | string, n: number }" == toString(requireType("t")));
+    else if (FFlag::LuauSolverV2)
         CHECK_EQ("{ [number]: string, n: number }", toString(requireType("t")));
     else
         CHECK_EQ("{| [number]: string, n: number |}", toString(requireType("t")));
@@ -720,7 +709,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bad_select_should_not_crash")
         end
     )");
 
-    if (FFlag::LuauSolverV2)
+    if (FFlag::LuauSolverV2 && FFlag::LuauArityMismatchOnUndersaturatedUnknownArguments)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        CHECK_EQ("Argument count mismatch. Function expects at least 1 argument, but none are specified", toString(result.errors[0]));
+        CHECK_EQ("Argument count mismatch. Function expects at least 1 argument, but none are specified", toString(result.errors[1]));
+    }
+    else if (FFlag::LuauSolverV2)
     {
         // Counterintuitively, the parameter l0 is unconstrained and therefore it is valid to pass nil.
         // The new solver therefore considers that parameter to be optional.
@@ -999,15 +994,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    if (FFlag::LuauSolverV2 && FFlag::LuauImproveTypePathsInErrors)
+    if (FFlag::LuauSolverV2)
         CHECK_EQ(
             "Type 'number?' could not be converted into 'number'; \n"
             "this is because the 2nd component of the union is `nil`, which is not a subtype of `number`",
-            toString(result.errors[0])
-        );
-    else if (FFlag::LuauSolverV2)
-        CHECK_EQ(
-            "Type 'number?' could not be converted into 'number'; type number?[1] (nil) is not a subtype of number (number)",
             toString(result.errors[0])
         );
     else
@@ -1672,10 +1662,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "string_format_should_support_any")
         print(string.format("Hello, %s!", x))
     )");
 
-    if (FFlag::LuauStringFormatErrorSuppression)
-        LUAU_REQUIRE_NO_ERRORS(result);
-    else
-        LUAU_REQUIRE_ERROR_COUNT(1, result);
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_SUITE_END();

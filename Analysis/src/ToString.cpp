@@ -19,8 +19,10 @@
 #include <stdexcept>
 #include <string>
 
+LUAU_FASTFLAGVARIABLE(LuauEnableDenseTableAlias)
+
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAGVARIABLE(LuauSyntheticErrors)
+LUAU_FASTFLAGVARIABLE(LuauStringPartLengthLimit)
 
 /*
  * Enables increasing levels of verbosity for Luau type names when stringifying.
@@ -40,6 +42,7 @@ LUAU_FASTFLAGVARIABLE(LuauSyntheticErrors)
  */
 LUAU_FASTINTVARIABLE(DebugLuauVerboseTypeNames, 0)
 LUAU_FASTFLAGVARIABLE(DebugLuauToStringNoLexicalSort)
+LUAU_FASTFLAGVARIABLE(LuauFixEmptyTypePackStringification)
 
 namespace Luau
 {
@@ -120,7 +123,7 @@ struct FindCyclicTypes final : TypeVisitor
         return true;
     }
 
-    bool visit(TypeId ty, const ClassType&) override
+    bool visit(TypeId ty, const ExternType&) override
     {
         return false;
     }
@@ -301,6 +304,28 @@ struct StringifierState
         emit(std::to_string(i).c_str());
     }
 
+    void emit(Polarity p)
+    {
+        switch (p)
+        {
+        case Polarity::None:
+            emit("  ");
+            break;
+        case Polarity::Negative:
+            emit(" -");
+            break;
+        case Polarity::Positive:
+            emit("+ ");
+            break;
+        case Polarity::Mixed:
+            emit("+-");
+            break;
+        default:
+            emit("!!");
+            break;
+        }
+    }
+
     void indent()
     {
         indentation += 4;
@@ -455,6 +480,9 @@ struct TypeStringifier
 
             bool wrap = !singleTp && get<TypePack>(follow(tp));
 
+            if (FFlag::LuauFixEmptyTypePackStringification)
+                wrap &= !isEmpty(tp);
+
             if (wrap)
                 state.emit("(");
 
@@ -482,6 +510,8 @@ struct TypeStringifier
             {
                 state.emit("'");
                 state.emit(state.getName(ty));
+                if (FInt::DebugLuauVerboseTypeNames >= 1)
+                    state.emit(ftv.polarity);
             }
             else
             {
@@ -493,6 +523,9 @@ struct TypeStringifier
                 }
                 state.emit("'");
                 state.emit(state.getName(ty));
+
+                if (FInt::DebugLuauVerboseTypeNames >= 1)
+                    state.emit(ftv.polarity);
 
                 if (!get<UnknownType>(upperBound))
                 {
@@ -508,6 +541,9 @@ struct TypeStringifier
             state.emit("free-");
 
         state.emit(state.getName(ty));
+
+        if (FFlag::LuauSolverV2 && FInt::DebugLuauVerboseTypeNames >= 1)
+            state.emit(ftv.polarity);
 
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
@@ -537,6 +573,9 @@ struct TypeStringifier
         }
         else
             state.emit(state.getName(ty));
+
+        if (FInt::DebugLuauVerboseTypeNames >= 1)
+            state.emit(gtv.polarity);
 
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
@@ -652,14 +691,18 @@ struct TypeStringifier
 
         state.emit("(");
 
-        if (state.opts.functionTypeArguments)
+        if (FFlag::LuauFixEmptyTypePackStringification && isEmpty(ftv.argTypes))
+        {
+            // if we've got an empty argument pack, we're done.
+        }
+        else if (state.opts.functionTypeArguments)
             stringify(ftv.argTypes, ftv.argNames);
         else
             stringify(ftv.argTypes);
 
         state.emit(") -> ");
 
-        bool plural = true;
+        bool plural = FFlag::LuauFixEmptyTypePackStringification ? !isEmpty(ftv.retTypes) : true;
 
         auto retBegin = begin(ftv.retTypes);
         auto retEnd = end(ftv.retTypes);
@@ -686,7 +729,13 @@ struct TypeStringifier
         if (ttv.boundTo)
             return stringify(*ttv.boundTo);
 
-        if (!state.exhaustive)
+        bool showName = !state.exhaustive;
+        if (FFlag::LuauEnableDenseTableAlias)
+        {
+            // if hide table alias expansions are enabled and there is a name found for the table, use it
+            showName = !state.exhaustive || state.opts.hideTableAliasExpansions;
+        }
+        if (showName)
         {
             if (ttv.name)
             {
@@ -709,6 +758,10 @@ struct TypeStringifier
                 stringify(ttv.instantiatedTypeParams, ttv.instantiatedTypePackParams);
                 return;
             }
+        }
+
+        if (!state.exhaustive)
+        {
             if (ttv.syntheticName)
             {
                 state.result.invalid = true;
@@ -847,9 +900,9 @@ struct TypeStringifier
         state.emit(" }");
     }
 
-    void operator()(TypeId, const ClassType& ctv)
+    void operator()(TypeId, const ExternType& etv)
     {
-        state.emit(ctv.name);
+        state.emit(etv.name);
     }
 
     void operator()(TypeId, const AnyType&)
@@ -877,6 +930,9 @@ struct TypeStringifier
         bool hasNonNilDisjunct = false;
 
         std::vector<std::string> results = {};
+        size_t resultsLength = 0;
+        bool lengthLimitHit = false;
+
         for (auto el : &uv)
         {
             el = follow(el);
@@ -903,14 +959,34 @@ struct TypeStringifier
             if (needParens)
                 state.emit(")");
 
+            if (FFlag::LuauStringPartLengthLimit)
+                resultsLength += state.result.name.length();
+
             results.push_back(std::move(state.result.name));
+
             state.result.name = std::move(saved);
+
+            if (FFlag::LuauStringPartLengthLimit)
+            {
+                lengthLimitHit = state.opts.maxTypeLength > 0 && resultsLength > state.opts.maxTypeLength;
+
+                if (lengthLimitHit)
+                    break;
+            }
         }
 
         state.unsee(&uv);
 
-        if (!FFlag::DebugLuauToStringNoLexicalSort)
-            std::sort(results.begin(), results.end());
+        if (FFlag::LuauStringPartLengthLimit)
+        {
+            if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+                std::sort(results.begin(), results.end());
+        }
+        else
+        {
+            if (!FFlag::DebugLuauToStringNoLexicalSort)
+                std::sort(results.begin(), results.end());
+        }
 
         if (optional && results.size() > 1)
             state.emit("(");
@@ -954,6 +1030,9 @@ struct TypeStringifier
         }
 
         std::vector<std::string> results = {};
+        size_t resultsLength = 0;
+        bool lengthLimitHit = false;
+
         for (auto el : uv.parts)
         {
             el = follow(el);
@@ -970,14 +1049,34 @@ struct TypeStringifier
             if (needParens)
                 state.emit(")");
 
+            if (FFlag::LuauStringPartLengthLimit)
+                resultsLength += state.result.name.length();
+
             results.push_back(std::move(state.result.name));
+
             state.result.name = std::move(saved);
+
+            if (FFlag::LuauStringPartLengthLimit)
+            {
+                lengthLimitHit = state.opts.maxTypeLength > 0 && resultsLength > state.opts.maxTypeLength;
+
+                if (lengthLimitHit)
+                    break;
+            }
         }
 
         state.unsee(&uv);
 
-        if (!FFlag::DebugLuauToStringNoLexicalSort)
-            std::sort(results.begin(), results.end());
+        if (FFlag::LuauStringPartLengthLimit)
+        {
+            if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+                std::sort(results.begin(), results.end());
+        }
+        else
+        {
+            if (!FFlag::DebugLuauToStringNoLexicalSort)
+                std::sort(results.begin(), results.end());
+        }
 
         bool first = true;
         bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit || isOverloadedFunction(ty);
@@ -1000,7 +1099,7 @@ struct TypeStringifier
     {
         state.result.error = true;
 
-        if (FFlag::LuauSyntheticErrors && tv.synthetic)
+        if (tv.synthetic)
         {
             state.emit("*error-type<");
             stringify(*tv.synthetic);
@@ -1144,6 +1243,16 @@ struct TypePackStringifier
             return;
         }
 
+        if (FFlag::LuauFixEmptyTypePackStringification)
+        {
+            if (tp.head.empty() && (!tp.tail || isEmpty(*tp.tail)))
+            {
+                state.emit("()");
+                state.unsee(&tp);
+                return;
+            }
+        }
+
         bool first = true;
 
         for (const auto& typeId : tp.head)
@@ -1186,7 +1295,7 @@ struct TypePackStringifier
     {
         state.result.error = true;
 
-        if (FFlag::LuauSyntheticErrors && error.synthetic)
+        if (error.synthetic)
         {
             state.emit("*");
             stringify(*error.synthetic);
@@ -1222,6 +1331,9 @@ struct TypePackStringifier
             state.emit(state.getName(tp));
         }
 
+        if (FInt::DebugLuauVerboseTypeNames >= 1)
+            state.emit(pack.polarity);
+
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
             state.emit("-");
@@ -1240,6 +1352,9 @@ struct TypePackStringifier
         if (FInt::DebugLuauVerboseTypeNames >= 1)
             state.emit("free-");
         state.emit(state.getName(tp));
+
+        if (FInt::DebugLuauVerboseTypeNames >= 1)
+            state.emit(pack.polarity);
 
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
@@ -1685,17 +1800,34 @@ std::string toStringNamedFunction(const std::string& funcName, const FunctionTyp
 
     state.emit("): ");
 
-    size_t retSize = size(ftv.retTypes);
-    bool hasTail = !finite(ftv.retTypes);
-    bool wrap = get<TypePack>(follow(ftv.retTypes)) && (hasTail ? retSize != 0 : retSize != 1);
+    if (FFlag::LuauFixEmptyTypePackStringification)
+    {
+        size_t retSize = size(ftv.retTypes);
+        bool hasTail = !finite(ftv.retTypes);
+        bool wrap = get<TypePack>(follow(ftv.retTypes)) && (hasTail ? retSize != 0 : retSize > 1);
 
-    if (wrap)
-        state.emit("(");
+        if (wrap)
+            state.emit("(");
 
-    tvs.stringify(ftv.retTypes);
+        tvs.stringify(ftv.retTypes);
 
-    if (wrap)
-        state.emit(")");
+        if (wrap)
+            state.emit(")");
+    }
+    else
+    {
+        size_t retSize = size(ftv.retTypes);
+        bool hasTail = !finite(ftv.retTypes);
+        bool wrap = get<TypePack>(follow(ftv.retTypes)) && (hasTail ? retSize != 0 : retSize != 1);
+
+        if (wrap)
+            state.emit("(");
+
+        tvs.stringify(ftv.retTypes);
+
+        if (wrap)
+            state.emit(")");
+    }
 
     return result.name;
 }
@@ -1867,6 +1999,8 @@ std::string toString(const Constraint& constraint, ToStringOptions& opts)
             return "equality: " + tos(c.resultType) + " ~ " + tos(c.assignmentType);
         else if constexpr (std::is_same_v<T, TableCheckConstraint>)
             return "table_check " + tos(c.expectedType) + " :> " + tos(c.exprType);
+        else if constexpr (std::is_same_v<T, SimplifyConstraint>)
+            return "simplify " + tos(c.ty);
         else
             static_assert(always_false_v<T>, "Non-exhaustive constraint switch");
     };

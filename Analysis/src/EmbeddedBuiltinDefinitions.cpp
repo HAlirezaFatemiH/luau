@@ -1,10 +1,13 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BuiltinDefinitions.h"
 
+LUAU_FASTFLAG(LuauDeclareExternType)
+LUAU_FASTFLAG(LuauTypeFunOptional)
+
 namespace Luau
 {
 
-static const std::string kBuiltinDefinitionBaseSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionBaseSrc = R"BUILTIN_SRC(
 
 @checked declare function require(target: any): any
 
@@ -57,7 +60,7 @@ declare function unpack<V>(tab: {V}, i: number?, j: number?): ...V
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionBit32Src = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionBit32Src = R"BUILTIN_SRC(
 
 declare bit32: {
     band: @checked (...number) -> number,
@@ -79,7 +82,7 @@ declare bit32: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionMathSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionMathSrc = R"BUILTIN_SRC(
 
 declare math: {
     frexp: @checked (n: number) -> (number, number),
@@ -130,7 +133,7 @@ declare math: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionOsSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionOsSrc = R"BUILTIN_SRC(
 
 type DateTypeArg = {
     year: number,
@@ -163,7 +166,7 @@ declare os: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionCoroutineSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionCoroutineSrc = R"BUILTIN_SRC(
 
 declare coroutine: {
     create: <A..., R...>(f: (A...) -> R...) -> thread,
@@ -178,7 +181,7 @@ declare coroutine: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionTableSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionTableSrc = R"BUILTIN_SRC(
 
 declare table: {
     concat: <V>(t: {V}, sep: string?, i: number?, j: number?) -> string,
@@ -204,7 +207,7 @@ declare table: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionDebugSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionDebugSrc = R"BUILTIN_SRC(
 
 declare debug: {
     info: ((thread: thread, level: number, options: string) -> ...any) & ((level: number, options: string) -> ...any) & (<A..., R1...>(func: (A...) -> R1..., options: string) -> ...any),
@@ -213,7 +216,7 @@ declare debug: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionUtf8Src = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionUtf8Src = R"BUILTIN_SRC(
 
 declare utf8: {
     char: @checked (...number) -> string,
@@ -226,7 +229,7 @@ declare utf8: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionBufferSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionBufferSrc = R"BUILTIN_SRC(
 --- Buffer API
 declare buffer: {
     create: @checked (size: number) -> buffer,
@@ -259,7 +262,37 @@ declare buffer: {
 
 )BUILTIN_SRC";
 
-static const std::string kBuiltinDefinitionVectorSrc = R"BUILTIN_SRC(
+static const char* const kBuiltinDefinitionVectorSrc = (FFlag::LuauDeclareExternType)
+    ? R"BUILTIN_SRC(
+
+-- While vector would have been better represented as a built-in primitive type, type solver extern type handling covers most of the properties
+declare extern type vector with
+    x: number
+    y: number
+    z: number
+end
+
+declare vector: {
+    create: @checked (x: number, y: number, z: number?) -> vector,
+    magnitude: @checked (vec: vector) -> number,
+    normalize: @checked (vec: vector) -> vector,
+    cross: @checked (vec1: vector, vec2: vector) -> vector,
+    dot: @checked (vec1: vector, vec2: vector) -> number,
+    angle: @checked (vec1: vector, vec2: vector, axis: vector?) -> number,
+    floor: @checked (vec: vector) -> vector,
+    ceil: @checked (vec: vector) -> vector,
+    abs: @checked (vec: vector) -> vector,
+    sign: @checked (vec: vector) -> vector,
+    clamp: @checked (vec: vector, min: vector, max: vector) -> vector,
+    max: @checked (vector, ...vector) -> vector,
+    min: @checked (vector, ...vector) -> vector,
+
+    zero: vector,
+    one: vector,
+}
+
+)BUILTIN_SRC"
+    : R"BUILTIN_SRC(
 
 -- While vector would have been better represented as a built-in primitive type, type solver class handling covers most of the properties
 declare class vector
@@ -307,11 +340,11 @@ std::string getBuiltinDefinitionSource()
 }
 
 // TODO: split into separate tagged unions when the new solver can appropriately handle that.
-static const std::string kBuiltinDefinitionTypesSrc = R"BUILTIN_SRC(
+static constexpr const char* kBuiltinDefinitionTypeMethodSrc = R"BUILTIN_SRC(
 
 export type type = {
     tag: "nil" | "unknown" | "never" | "any" | "boolean" | "number" | "string" | "buffer" | "thread" |
-         "singleton" | "negation" | "union" | "intesection" | "table" | "function" | "class" | "generic",
+         "singleton" | "negation" | "union" | "intersection" | "table" | "function" | "class" | "generic",
 
     is: (self: type, arg: string) -> boolean,
 
@@ -358,6 +391,10 @@ export type type = {
     ispack: (self: type) -> boolean,
 }
 
+)BUILTIN_SRC";
+
+static constexpr const char* kBuiltinDefinitionTypesLibSrc = R"BUILTIN_SRC(
+
 declare types: {
     unknown: type,
     never: type,
@@ -377,12 +414,44 @@ declare types: {
     newfunction: @checked (parameters: { head: {type}?, tail: type? }?, returns: { head: {type}?, tail: type? }?, generics: {type}?) -> type,
     copy: @checked (arg: type) -> type,
 }
-
 )BUILTIN_SRC";
+
+static constexpr const char* kBuiltinDefinitionTypesLibWithOptionalSrc = R"BUILTIN_SRC(
+
+declare types: {
+    unknown: type,
+    never: type,
+    any: type,
+    boolean: type,
+    number: type,
+    string: type,
+    thread: type,
+    buffer: type,
+
+    singleton: @checked (arg: string | boolean | nil) -> type,
+    optional: @checked (arg: type) -> type,
+    generic: @checked (name: string, ispack: boolean?) -> type,
+    negationof: @checked (arg: type) -> type,
+    unionof: @checked (...type) -> type,
+    intersectionof: @checked (...type) -> type,
+    newtable: @checked (props: {[type]: type} | {[type]: { read: type, write: type } } | nil, indexer: { index: type, readresult: type, writeresult: type }?, metatable: type?) -> type,
+    newfunction: @checked (parameters: { head: {type}?, tail: type? }?, returns: { head: {type}?, tail: type? }?, generics: {type}?) -> type,
+    copy: @checked (arg: type) -> type,
+}
+)BUILTIN_SRC";
+
 
 std::string getTypeFunctionDefinitionSource()
 {
-    return kBuiltinDefinitionTypesSrc;
+
+    std::string result = kBuiltinDefinitionTypeMethodSrc;
+
+    if (FFlag::LuauTypeFunOptional)
+        result += kBuiltinDefinitionTypesLibWithOptionalSrc;
+    else
+        result += kBuiltinDefinitionTypesLibSrc;
+
+    return result;
 }
 
 } // namespace Luau

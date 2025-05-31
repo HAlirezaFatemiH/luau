@@ -15,10 +15,8 @@
 #include "doctest.h"
 #include <iostream>
 
-LUAU_FASTFLAG(LuauNewNonStrictWarnOnUnknownGlobals)
-LUAU_FASTFLAG(LuauNonStrictVisitorImprovements)
-LUAU_FASTFLAG(LuauNonStrictFuncDefErrorFix)
-LUAU_FASTFLAG(LuauNormalizedBufferIsNotUnknown)
+LUAU_FASTFLAG(LuauNewNonStrictVisitTypes2)
+LUAU_FASTFLAG(LuauNewNonStrictFixGenericTypePacks)
 
 using namespace Luau;
 
@@ -363,9 +361,6 @@ end
 
 TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "function_def_sequencing_errors_2")
 {
-    ScopedFastFlag luauNonStrictFuncDefErrorFix{FFlag::LuauNonStrictFuncDefErrorFix, true};
-    ScopedFastFlag luauNonStrictVisitorImprovements{FFlag::LuauNonStrictVisitorImprovements, true};
-
     CheckResult result = checkNonStrict(R"(
 local t = {function(x)
     abs(x)
@@ -512,8 +507,6 @@ foo.bar("hi")
 
 TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "exprgroup_is_checked")
 {
-    ScopedFastFlag sff{FFlag::LuauNonStrictVisitorImprovements, true};
-
     CheckResult result = checkNonStrict(R"(
         local foo = (abs("foo"))
     )");
@@ -529,8 +522,6 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "exprgroup_is_checked")
 
 TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "binop_is_checked")
 {
-    ScopedFastFlag sff{FFlag::LuauNonStrictVisitorImprovements, true};
-
     CheckResult result = checkNonStrict(R"(
         local foo = 4 + abs("foo")
     )");
@@ -566,6 +557,18 @@ optionalArgsAtTheEnd1("a")
 optionalArgsAtTheEnd1("a", 3)
 optionalArgsAtTheEnd1("a", nil, 3)
 )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "generic_type_packs_in_non_strict")
+{
+    ScopedFastFlag sff{FFlag::LuauNewNonStrictFixGenericTypePacks, true};
+
+    CheckResult result = checkNonStrict(R"(
+        --!nonstrict
+        local test: <T...>(T...) -> () -- TypeError: Unknown type 'T'
+    )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
 }
@@ -655,8 +658,6 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "nonstrict_method_calls")
 
 TEST_CASE_FIXTURE(Fixture, "unknown_globals_in_non_strict")
 {
-    ScopedFastFlag flags[] = {{FFlag::LuauNonStrictVisitorImprovements, true}, {FFlag::LuauNewNonStrictWarnOnUnknownGlobals, true}};
-
     CheckResult result = check(Mode::Nonstrict, R"(
         foo = 5
         local wrong1 = foob
@@ -668,10 +669,38 @@ TEST_CASE_FIXTURE(Fixture, "unknown_globals_in_non_strict")
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_types_in_non_strict")
+{
+    ScopedFastFlag sff{FFlag::LuauNewNonStrictVisitTypes2, true};
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+        --!nonstrict
+        local foo: Foo = 1
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnknownSymbol* err = get<UnknownSymbol>(result.errors[0]);
+    CHECK_EQ(err->name, "Foo");
+    CHECK_EQ(err->context, UnknownSymbol::Context::Type);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_types_in_non_strict_2")
+{
+    ScopedFastFlag sff{FFlag::LuauNewNonStrictVisitTypes2, true};
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+        --!nonstrict
+        local foo = 1 :: Foo
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnknownSymbol* err = get<UnknownSymbol>(result.errors[0]);
+    CHECK_EQ(err->name, "Foo");
+    CHECK_EQ(err->context, UnknownSymbol::Context::Type);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_is_not_unknown")
 {
-    ScopedFastFlag luauNormalizedBufferIsNotUnknown{FFlag::LuauNormalizedBufferIsNotUnknown, true};
-
     CheckResult result = check(Mode::Nonstrict, R"(
 local function wrap(b: buffer, i: number, v: number)
     buffer.writeu32(b, i * 4, v)
@@ -679,6 +708,15 @@ end
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "incomplete_function_annotation")
+{
+    CheckResult result = check(Mode::Nonstrict, R"(
+        local x: () ->
+    )");
+
+    LUAU_REQUIRE_ERRORS(result);
 }
 
 TEST_SUITE_END();

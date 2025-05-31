@@ -16,7 +16,8 @@
 #include <initializer_list>
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauNormalizedBufferIsNotUnknown)
+LUAU_FASTFLAG(LuauSubtypeGenericsAndNegations)
+LUAU_FASTFLAG(LuauEagerGeneralization2)
 
 using namespace Luau;
 
@@ -152,13 +153,13 @@ struct SubtypeFixture : Fixture
 
     TypeId cls(const std::string& name, std::optional<TypeId> parent = std::nullopt)
     {
-        return arena.addType(ClassType{name, {}, parent.value_or(builtinTypes->classType), {}, {}, nullptr, "", {}});
+        return arena.addType(ExternType{name, {}, parent.value_or(builtinTypes->externType), {}, {}, nullptr, "", {}});
     }
 
-    TypeId cls(const std::string& name, ClassType::Props&& props)
+    TypeId cls(const std::string& name, ExternType::Props&& props)
     {
         TypeId ty = cls(name);
-        getMutable<ClassType>(ty)->props = std::move(props);
+        getMutable<ExternType>(ty)->props = std::move(props);
         return ty;
     }
 
@@ -927,9 +928,9 @@ TEST_IS_NOT_SUBTYPE(numbersToNumberType, negate(join(builtinTypes->functionType,
 // Negated supertypes: intersections
 TEST_IS_SUBTYPE(builtinTypes->booleanType, negate(meet(builtinTypes->stringType, str("foo"))));
 TEST_IS_SUBTYPE(builtinTypes->trueType, negate(meet(builtinTypes->booleanType, builtinTypes->numberType)));
-TEST_IS_SUBTYPE(rootClass, negate(meet(builtinTypes->classType, childClass)));
-TEST_IS_SUBTYPE(childClass, negate(meet(builtinTypes->classType, builtinTypes->numberType)));
-TEST_IS_SUBTYPE(builtinTypes->unknownType, negate(meet(builtinTypes->classType, builtinTypes->numberType)));
+TEST_IS_SUBTYPE(rootClass, negate(meet(builtinTypes->externType, childClass)));
+TEST_IS_SUBTYPE(childClass, negate(meet(builtinTypes->externType, builtinTypes->numberType)));
+TEST_IS_SUBTYPE(builtinTypes->unknownType, negate(meet(builtinTypes->externType, builtinTypes->numberType)));
 TEST_IS_NOT_SUBTYPE(str("foo"), negate(meet(builtinTypes->stringType, negate(str("bar")))));
 
 // Negated supertypes: tables and metatables
@@ -939,7 +940,7 @@ TEST_IS_SUBTYPE(meta({}), negate(builtinTypes->numberType));
 TEST_IS_NOT_SUBTYPE(meta({}), negate(builtinTypes->tableType));
 
 // Negated supertypes: Functions
-TEST_IS_SUBTYPE(numberToNumberType, negate(builtinTypes->classType));
+TEST_IS_SUBTYPE(numberToNumberType, negate(builtinTypes->externType));
 TEST_IS_NOT_SUBTYPE(numberToNumberType, negate(builtinTypes->functionType));
 
 // Negated supertypes: Primitives and singletons
@@ -955,35 +956,28 @@ TEST_IS_NOT_SUBTYPE(builtinTypes->stringType, meet(builtinTypes->booleanType, ne
 TEST_IS_NOT_SUBTYPE(builtinTypes->stringType, negate(str("foo")));
 TEST_IS_NOT_SUBTYPE(builtinTypes->booleanType, negate(builtinTypes->falseType));
 
-// Negated supertypes: Classes
+// Negated supertypes: extern types
 TEST_IS_SUBTYPE(rootClass, negate(builtinTypes->tableType));
-TEST_IS_NOT_SUBTYPE(rootClass, negate(builtinTypes->classType));
+TEST_IS_NOT_SUBTYPE(rootClass, negate(builtinTypes->externType));
 TEST_IS_NOT_SUBTYPE(childClass, negate(rootClass));
-TEST_IS_NOT_SUBTYPE(childClass, meet(builtinTypes->classType, negate(rootClass)));
-TEST_IS_SUBTYPE(anotherChildClass, meet(builtinTypes->classType, negate(childClass)));
+TEST_IS_NOT_SUBTYPE(childClass, meet(builtinTypes->externType, negate(rootClass)));
+TEST_IS_SUBTYPE(anotherChildClass, meet(builtinTypes->externType, negate(childClass)));
 
 // Negated primitives against unknown
 TEST_IS_NOT_SUBTYPE(builtinTypes->unknownType, negate(builtinTypes->booleanType));
 TEST_IS_NOT_SUBTYPE(builtinTypes->unknownType, negate(builtinTypes->numberType));
 TEST_IS_NOT_SUBTYPE(builtinTypes->unknownType, negate(builtinTypes->stringType));
 TEST_IS_NOT_SUBTYPE(builtinTypes->unknownType, negate(builtinTypes->threadType));
-
-TEST_CASE_FIXTURE(SubtypeFixture, "unknown <!: ~buffer")
-{
-    // TODO: replace with TEST_IS_NOT_SUBTYPE on flag removal
-    ScopedFastFlag luauNormalizedBufferIsNotUnknown{FFlag::LuauNormalizedBufferIsNotUnknown, true};
-
-    CHECK_IS_NOT_SUBTYPE(builtinTypes->unknownType, negate(builtinTypes->bufferType));
-}
+TEST_IS_NOT_SUBTYPE(builtinTypes->unknownType, negate(builtinTypes->bufferType));
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Root <: class")
 {
-    CHECK_IS_SUBTYPE(rootClass, builtinTypes->classType);
+    CHECK_IS_SUBTYPE(rootClass, builtinTypes->externType);
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Child | AnotherChild <: class")
 {
-    CHECK_IS_SUBTYPE(join(childClass, anotherChildClass), builtinTypes->classType);
+    CHECK_IS_SUBTYPE(join(childClass, anotherChildClass), builtinTypes->externType);
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Child | AnotherChild <: Child | AnotherChild")
@@ -998,17 +992,17 @@ TEST_CASE_FIXTURE(SubtypeFixture, "Child | Root <: Root")
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Child & AnotherChild <: class")
 {
-    CHECK_IS_SUBTYPE(meet(childClass, anotherChildClass), builtinTypes->classType);
+    CHECK_IS_SUBTYPE(meet(childClass, anotherChildClass), builtinTypes->externType);
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Child & Root <: class")
 {
-    CHECK_IS_SUBTYPE(meet(childClass, rootClass), builtinTypes->classType);
+    CHECK_IS_SUBTYPE(meet(childClass, rootClass), builtinTypes->externType);
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Child & ~Root <: class")
 {
-    CHECK_IS_SUBTYPE(meet(childClass, negate(rootClass)), builtinTypes->classType);
+    CHECK_IS_SUBTYPE(meet(childClass, negate(rootClass)), builtinTypes->externType);
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Child & AnotherChild <: number")
@@ -1257,8 +1251,7 @@ TEST_CASE_FIXTURE(SubtypeFixture, "bill")
     CHECK(isSubtype(b, a).isSubtype);
 }
 
-// TEST_CASE_FIXTURE(SubtypeFixture, "({[string]: number, a: string}) -> () <: ({[string]: number, a: string}) -> ()")
-TEST_CASE_FIXTURE(SubtypeFixture, "fred")
+TEST_CASE_FIXTURE(SubtypeFixture, "({[string]: number, a: string}) -> () <: ({[string]: number, a: string}) -> ()")
 {
     auto makeTheType = [&]()
     {
@@ -1397,7 +1390,7 @@ TEST_CASE_FIXTURE(SubtypeFixture, "subtyping_reasonings_to_follow_a_reduced_type
     TypeId longTy = arena.addType(UnionType{
         {builtinTypes->booleanType,
          builtinTypes->bufferType,
-         builtinTypes->classType,
+         builtinTypes->externType,
          builtinTypes->functionType,
          builtinTypes->numberType,
          builtinTypes->stringType,
@@ -1622,6 +1615,46 @@ TEST_CASE_FIXTURE(SubtypeFixture, "multiple_reasonings")
             },
         }
     );
+}
+
+TEST_CASE_FIXTURE(SubtypeFixture, "substitute_a_generic_for_a_negation")
+{
+    ScopedFastFlag sff{FFlag::LuauSubtypeGenericsAndNegations, true};
+
+    // <A, B>(x: A, y: B) -> (A & ~(false?)) | B
+    // (~(false?), ~(false?)) -> (~(false?) & ~(false?)) | ~(false?)
+
+    TypeId aTy = arena.addType(GenericType{"A"});
+    getMutable<GenericType>(aTy)->scope = moduleScope.get();
+    TypeId bTy = arena.addType(GenericType{"B"});
+    getMutable<GenericType>(bTy)->scope = moduleScope.get();
+
+    TypeId genericFunctionTy =
+        arena.addType(FunctionType{{aTy, bTy}, {}, arena.addTypePack({aTy, bTy}), arena.addTypePack({join(meet(aTy, builtinTypes->truthyType), bTy)})}
+        );
+
+    const TypeId truthyTy = builtinTypes->truthyType;
+
+    TypeId actualFunctionTy = fn({truthyTy, truthyTy}, {join(meet(truthyTy, builtinTypes->truthyType), truthyTy)});
+
+    SubtypingResult result = isSubtype(genericFunctionTy, actualFunctionTy);
+
+    CHECK(result.isSubtype);
+}
+
+TEST_CASE_FIXTURE(SubtypeFixture, "free_types_might_be_subtypes")
+{
+    ScopedFastFlag sff{FFlag::LuauEagerGeneralization2, true};
+
+    TypeId argTy = arena.freshType(builtinTypes, moduleScope.get());
+    FreeType* freeArg = getMutable<FreeType>(argTy);
+    REQUIRE(freeArg);
+    freeArg->lowerBound = arena.addType(SingletonType{StringSingleton{"five"}});
+    freeArg->upperBound = builtinTypes->stringType;
+
+    SubtypingResult result = isSubtype(builtinTypes->stringType, argTy);
+    CHECK(result.isSubtype);
+    REQUIRE(1 == result.assumedConstraints.size());
 }
 
 TEST_SUITE_END();

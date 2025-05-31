@@ -332,11 +332,11 @@ struct TypePackMismatch
     bool operator==(const TypePackMismatch& rhs) const;
 };
 
-struct DynamicPropertyLookupOnClassesUnsafe
+struct DynamicPropertyLookupOnExternTypesUnsafe
 {
     TypeId ty;
 
-    bool operator==(const DynamicPropertyLookupOnClassesUnsafe& rhs) const;
+    bool operator==(const DynamicPropertyLookupOnExternTypesUnsafe& rhs) const;
 };
 
 struct UninhabitedTypeFunction
@@ -455,6 +455,21 @@ struct UserDefinedTypeFunctionError
     bool operator==(const UserDefinedTypeFunctionError& rhs) const;
 };
 
+struct ReservedIdentifier
+{
+    std::string name;
+
+    bool operator==(const ReservedIdentifier& rhs) const;
+};
+
+struct UnexpectedArrayLikeTableItem
+{
+    bool operator==(const UnexpectedArrayLikeTableItem&) const
+    {
+        return true;
+    }
+};
+
 using TypeErrorData = Variant<
     TypeMismatch,
     UnknownSymbol,
@@ -492,7 +507,7 @@ using TypeErrorData = Variant<
     TypesAreUnrelated,
     NormalizationTooComplex,
     TypePackMismatch,
-    DynamicPropertyLookupOnClassesUnsafe,
+    DynamicPropertyLookupOnExternTypesUnsafe,
     UninhabitedTypeFunction,
     UninhabitedTypePackFunction,
     WhereClauseNeeded,
@@ -504,7 +519,9 @@ using TypeErrorData = Variant<
     UnexpectedTypeInSubtyping,
     UnexpectedTypePackInSubtyping,
     ExplicitFunctionAnnotationRecommended,
-    UserDefinedTypeFunctionError>;
+    UserDefinedTypeFunctionError,
+    ReservedIdentifier,
+    UnexpectedArrayLikeTableItem>;
 
 struct TypeErrorSummary
 {

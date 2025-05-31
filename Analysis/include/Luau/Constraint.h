@@ -51,6 +51,10 @@ struct GeneralizationConstraint
 
     std::vector<TypeId> interiorTypes;
     bool hasDeprecatedAttribute = false;
+
+    /// If true, never introduce generics.  Always replace free types by their
+    /// bounds or unknown. Presently used only to generalize the whole module.
+    bool noGenerics = false;
 };
 
 // variables ~ iterate iterator
@@ -272,6 +276,12 @@ struct ReducePackConstraint
     TypePackId tp;
 };
 
+// simplify ty
+struct SimplifyConstraint
+{
+    TypeId ty;
+};
+
 using ConstraintV = Variant<
     SubtypeConstraint,
     PackSubtypeConstraint,
@@ -290,7 +300,8 @@ using ConstraintV = Variant<
     ReduceConstraint,
     ReducePackConstraint,
     EqualityConstraint,
-    TableCheckConstraint>;
+    TableCheckConstraint,
+    SimplifyConstraint>;
 
 struct Constraint
 {

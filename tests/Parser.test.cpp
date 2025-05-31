@@ -3,6 +3,7 @@
 
 #include "AstQueryDsl.h"
 #include "Fixture.h"
+#include "Luau/Ast.h"
 #include "Luau/Common.h"
 #include "ScopedFlags.h"
 
@@ -16,15 +17,10 @@ LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTINT(LuauTypeLengthLimit)
 LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauAllowComplexTypesInGenericParams)
-LUAU_FASTFLAG(LuauErrorRecoveryForTableTypes)
-LUAU_FASTFLAG(LuauExtendStatEndPosWithSemicolon)
-LUAU_FASTFLAG(LuauPreserveUnionIntersectionNodeForLeadingTokenSingleType)
-LUAU_FASTFLAG(LuauAstTypeGroup3)
-LUAU_FASTFLAG(LuauFixDoBlockEndLocation)
-LUAU_FASTFLAG(LuauParseOptionalAsNode2)
+LUAU_FASTFLAG(LuauStoreReturnTypesAsPackOnAst)
 LUAU_FASTFLAG(LuauParseStringIndexer)
-LUAU_FASTFLAG(LuauFixFunctionWithAttributesStartLocation)
+LUAU_FASTFLAG(LuauDeclareExternType)
+LUAU_FASTFLAG(LuauStoreCSTData2)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
@@ -156,9 +152,20 @@ TEST_CASE_FIXTURE(Fixture, "functions_can_have_return_annotations")
     AstStatFunction* statFunction = block->body.data[0]->as<AstStatFunction>();
     REQUIRE(statFunction != nullptr);
 
-    REQUIRE(statFunction->func->returnAnnotation.has_value());
-    CHECK_EQ(statFunction->func->returnAnnotation->types.size, 1);
-    CHECK(statFunction->func->returnAnnotation->tailType == nullptr);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        REQUIRE(statFunction->func->returnAnnotation);
+        auto typePack = statFunction->func->returnAnnotation->as<AstTypePackExplicit>();
+        REQUIRE(typePack);
+        CHECK_EQ(typePack->typeList.types.size, 1);
+        CHECK(typePack->typeList.tailType == nullptr);
+    }
+    else
+    {
+        REQUIRE(statFunction->func->returnAnnotation_DEPRECATED.has_value());
+        CHECK_EQ(statFunction->func->returnAnnotation_DEPRECATED->types.size, 1);
+        CHECK(statFunction->func->returnAnnotation_DEPRECATED->tailType == nullptr);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "functions_can_have_a_function_type_annotation")
@@ -173,13 +180,28 @@ TEST_CASE_FIXTURE(Fixture, "functions_can_have_a_function_type_annotation")
     AstStatFunction* statFunc = block->body.data[0]->as<AstStatFunction>();
     REQUIRE(statFunc != nullptr);
 
-    REQUIRE(statFunc->func->returnAnnotation.has_value());
-    CHECK(statFunc->func->returnAnnotation->tailType == nullptr);
-    AstArray<AstType*>& retTypes = statFunc->func->returnAnnotation->types;
-    REQUIRE(retTypes.size == 1);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        REQUIRE(statFunc->func->returnAnnotation);
+        auto typePack = statFunc->func->returnAnnotation->as<AstTypePackExplicit>();
+        REQUIRE(typePack);
+        CHECK(typePack->typeList.tailType == nullptr);
+        AstArray<AstType*>& retTypes = typePack->typeList.types;
+        REQUIRE(retTypes.size == 1);
 
-    AstTypeFunction* funTy = retTypes.data[0]->as<AstTypeFunction>();
-    REQUIRE(funTy != nullptr);
+        AstTypeFunction* funTy = retTypes.data[0]->as<AstTypeFunction>();
+        REQUIRE(funTy != nullptr);
+    }
+    else
+    {
+        REQUIRE(statFunc->func->returnAnnotation_DEPRECATED.has_value());
+        CHECK(statFunc->func->returnAnnotation_DEPRECATED->tailType == nullptr);
+        AstArray<AstType*>& retTypes = statFunc->func->returnAnnotation_DEPRECATED->types;
+        REQUIRE(retTypes.size == 1);
+
+        AstTypeFunction* funTy = retTypes.data[0]->as<AstTypeFunction>();
+        REQUIRE(funTy != nullptr);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "function_return_type_should_disambiguate_from_function_type_and_multiple_returns")
@@ -194,18 +216,38 @@ TEST_CASE_FIXTURE(Fixture, "function_return_type_should_disambiguate_from_functi
     AstStatFunction* statFunc = block->body.data[0]->as<AstStatFunction>();
     REQUIRE(statFunc != nullptr);
 
-    REQUIRE(statFunc->func->returnAnnotation.has_value());
-    CHECK(statFunc->func->returnAnnotation->tailType == nullptr);
-    AstArray<AstType*>& retTypes = statFunc->func->returnAnnotation->types;
-    REQUIRE(retTypes.size == 2);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        REQUIRE(statFunc->func->returnAnnotation);
+        auto typePack = statFunc->func->returnAnnotation->as<AstTypePackExplicit>();
+        REQUIRE(typePack);
+        CHECK(typePack->typeList.tailType == nullptr);
+        AstArray<AstType*>& retTypes = typePack->typeList.types;
+        REQUIRE(retTypes.size == 2);
 
-    AstTypeReference* ty0 = retTypes.data[0]->as<AstTypeReference>();
-    REQUIRE(ty0 != nullptr);
-    REQUIRE(ty0->name == "number");
+        AstTypeReference* ty0 = retTypes.data[0]->as<AstTypeReference>();
+        REQUIRE(ty0 != nullptr);
+        REQUIRE(ty0->name == "number");
 
-    AstTypeReference* ty1 = retTypes.data[1]->as<AstTypeReference>();
-    REQUIRE(ty1 != nullptr);
-    REQUIRE(ty1->name == "string");
+        AstTypeReference* ty1 = retTypes.data[1]->as<AstTypeReference>();
+        REQUIRE(ty1 != nullptr);
+        REQUIRE(ty1->name == "string");
+    }
+    else
+    {
+        REQUIRE(statFunc->func->returnAnnotation_DEPRECATED.has_value());
+        CHECK(statFunc->func->returnAnnotation_DEPRECATED->tailType == nullptr);
+        AstArray<AstType*>& retTypes = statFunc->func->returnAnnotation_DEPRECATED->types;
+        REQUIRE(retTypes.size == 2);
+
+        AstTypeReference* ty0 = retTypes.data[0]->as<AstTypeReference>();
+        REQUIRE(ty0 != nullptr);
+        REQUIRE(ty0->name == "number");
+
+        AstTypeReference* ty1 = retTypes.data[1]->as<AstTypeReference>();
+        REQUIRE(ty1 != nullptr);
+        REQUIRE(ty1->name == "string");
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "function_return_type_should_parse_as_function_type_annotation_with_no_args")
@@ -220,20 +262,45 @@ TEST_CASE_FIXTURE(Fixture, "function_return_type_should_parse_as_function_type_a
     AstStatFunction* statFunc = block->body.data[0]->as<AstStatFunction>();
     REQUIRE(statFunc != nullptr);
 
-    REQUIRE(statFunc->func->returnAnnotation.has_value());
-    CHECK(statFunc->func->returnAnnotation->tailType == nullptr);
-    AstArray<AstType*>& retTypes = statFunc->func->returnAnnotation->types;
-    REQUIRE(retTypes.size == 1);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        REQUIRE(statFunc->func->returnAnnotation);
+        auto typePack = statFunc->func->returnAnnotation->as<AstTypePackExplicit>();
+        REQUIRE(typePack);
+        CHECK(typePack->typeList.tailType == nullptr);
+        AstArray<AstType*>& retTypes = typePack->typeList.types;
+        REQUIRE(retTypes.size == 1);
 
-    AstTypeFunction* funTy = retTypes.data[0]->as<AstTypeFunction>();
-    REQUIRE(funTy != nullptr);
-    REQUIRE(funTy->argTypes.types.size == 0);
-    CHECK(funTy->argTypes.tailType == nullptr);
-    CHECK(funTy->returnTypes.tailType == nullptr);
+        AstTypeFunction* funTy = retTypes.data[0]->as<AstTypeFunction>();
+        REQUIRE(funTy != nullptr);
+        REQUIRE(funTy->argTypes.types.size == 0);
+        CHECK(funTy->argTypes.tailType == nullptr);
 
-    AstTypeReference* ty = funTy->returnTypes.types.data[0]->as<AstTypeReference>();
-    REQUIRE(ty != nullptr);
-    REQUIRE(ty->name == "nil");
+        auto funReturnPack = funTy->returnTypes->as<AstTypePackExplicit>();
+        REQUIRE(funReturnPack);
+        CHECK(funReturnPack->typeList.tailType == nullptr);
+
+        AstTypeReference* ty = funReturnPack->typeList.types.data[0]->as<AstTypeReference>();
+        REQUIRE(ty != nullptr);
+        REQUIRE(ty->name == "nil");
+    }
+    else
+    {
+        REQUIRE(statFunc->func->returnAnnotation_DEPRECATED.has_value());
+        CHECK(statFunc->func->returnAnnotation_DEPRECATED->tailType == nullptr);
+        AstArray<AstType*>& retTypes = statFunc->func->returnAnnotation_DEPRECATED->types;
+        REQUIRE(retTypes.size == 1);
+
+        AstTypeFunction* funTy = retTypes.data[0]->as<AstTypeFunction>();
+        REQUIRE(funTy != nullptr);
+        REQUIRE(funTy->argTypes.types.size == 0);
+        CHECK(funTy->argTypes.tailType == nullptr);
+        CHECK(funTy->returnTypes_DEPRECATED.tailType == nullptr);
+
+        AstTypeReference* ty = funTy->returnTypes_DEPRECATED.types.data[0]->as<AstTypeReference>();
+        REQUIRE(ty != nullptr);
+        REQUIRE(ty->name == "nil");
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "annotations_can_be_tables")
@@ -375,12 +442,19 @@ TEST_CASE_FIXTURE(Fixture, "return_type_is_an_intersection_type_if_led_with_one_
     AstTypeFunction* annotation = local->vars.data[0]->annotation->as<AstTypeFunction>();
     REQUIRE(annotation != nullptr);
 
-    AstTypeIntersection* returnAnnotation = annotation->returnTypes.types.data[0]->as<AstTypeIntersection>();
-    REQUIRE(returnAnnotation != nullptr);
-    if (FFlag::LuauAstTypeGroup3)
-        CHECK(returnAnnotation->types.data[0]->as<AstTypeGroup>());
+    AstTypeIntersection* returnAnnotation;
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        auto returnTypePack = annotation->returnTypes->as<AstTypePackExplicit>();
+        REQUIRE(returnTypePack);
+        returnAnnotation = returnTypePack->typeList.types.data[0]->as<AstTypeIntersection>();
+    }
     else
-        CHECK(returnAnnotation->types.data[0]->as<AstTypeReference>());
+    {
+        returnAnnotation = annotation->returnTypes_DEPRECATED.types.data[0]->as<AstTypeIntersection>();
+    }
+    REQUIRE(returnAnnotation != nullptr);
+    CHECK(returnAnnotation->types.data[0]->as<AstTypeGroup>());
     CHECK(returnAnnotation->types.data[1]->as<AstTypeFunction>());
 }
 
@@ -1187,8 +1261,6 @@ until false
 
 TEST_CASE_FIXTURE(Fixture, "parse_nesting_based_end_detection_local_function")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
-
     try
     {
         parse(R"(-- i am line 1
@@ -1222,8 +1294,6 @@ end
 
 TEST_CASE_FIXTURE(Fixture, "parse_nesting_based_end_detection_failsafe_earlier")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
-
     try
     {
         parse(R"(-- i am line 1
@@ -1930,7 +2000,16 @@ TEST_CASE_FIXTURE(Fixture, "parse_declarations")
     CHECK(func->name == "bar");
     CHECK(func->nameLocation == Location({2, 25}, {2, 28}));
     REQUIRE_EQ(func->params.types.size, 1);
-    REQUIRE_EQ(func->retTypes.types.size, 1);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        auto retTypePack = func->retTypes->as<AstTypePackExplicit>();
+        REQUIRE(retTypePack);
+        REQUIRE_EQ(retTypePack->typeList.types.size, 1);
+    }
+    else
+    {
+        REQUIRE_EQ(func->retTypes_DEPRECATED.types.size, 1);
+    }
 
     AstStatDeclareFunction* varFunc = stat->body.data[2]->as<AstStatDeclareFunction>();
     REQUIRE(varFunc);
@@ -1960,34 +2039,252 @@ TEST_CASE_FIXTURE(Fixture, "parse_class_declarations")
 
     REQUIRE_EQ(stat->body.size, 2);
 
-    AstStatDeclareClass* declaredClass = stat->body.data[0]->as<AstStatDeclareClass>();
-    REQUIRE(declaredClass);
-    CHECK(declaredClass->name == "Foo");
-    CHECK(!declaredClass->superName);
+    AstStatDeclareExternType* declaredExternType = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaredExternType);
+    CHECK(declaredExternType->name == "Foo");
+    CHECK(!declaredExternType->superName);
 
-    REQUIRE_EQ(declaredClass->props.size, 2);
+    REQUIRE_EQ(declaredExternType->props.size, 2);
 
-    AstDeclaredClassProp& prop = declaredClass->props.data[0];
+    AstDeclaredExternTypeProperty& prop = declaredExternType->props.data[0];
     CHECK(prop.name == "prop");
     CHECK(prop.nameLocation == Location({2, 12}, {2, 16}));
     CHECK(prop.ty->is<AstTypeReference>());
     CHECK(prop.location == Location({2, 12}, {2, 24}));
 
-    AstDeclaredClassProp& method = declaredClass->props.data[1];
+    AstDeclaredExternTypeProperty& method = declaredExternType->props.data[1];
     CHECK(method.name == "method");
     CHECK(method.nameLocation == Location({3, 21}, {3, 27}));
     CHECK(method.ty->is<AstTypeFunction>());
     CHECK(method.location == Location({3, 12}, {3, 54}));
     CHECK(method.isMethod);
 
-    AstStatDeclareClass* subclass = stat->body.data[1]->as<AstStatDeclareClass>();
+    AstStatDeclareExternType* subclass = stat->body.data[1]->as<AstStatDeclareExternType>();
     REQUIRE(subclass);
     REQUIRE(subclass->superName);
     CHECK(subclass->name == "Bar");
     CHECK(*subclass->superName == "Foo");
 
     REQUIRE_EQ(subclass->props.size, 1);
-    AstDeclaredClassProp& prop2 = subclass->props.data[0];
+    AstDeclaredExternTypeProperty& prop2 = subclass->props.data[0];
+    CHECK(prop2.name == "prop2");
+    CHECK(prop2.nameLocation == Location({7, 12}, {7, 17}));
+    CHECK(prop2.ty->is<AstTypeReference>());
+    CHECK(prop2.location == Location({7, 12}, {7, 25}));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations")
+{
+    ScopedFastFlag sff{FFlag::LuauDeclareExternType, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Foo with
+            prop: number
+            function method(self, foo: number): string
+        end
+
+        declare extern type Bar extends Foo with
+            prop2: string
+        end
+    )")
+                             .root;
+
+    REQUIRE_EQ(stat->body.size, 2);
+
+    AstStatDeclareExternType* declaredExternType = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaredExternType);
+    CHECK(declaredExternType->name == "Foo");
+    CHECK(!declaredExternType->superName);
+
+    REQUIRE_EQ(declaredExternType->props.size, 2);
+
+    AstDeclaredExternTypeProperty& prop = declaredExternType->props.data[0];
+    CHECK(prop.name == "prop");
+    CHECK(prop.nameLocation == Location({2, 12}, {2, 16}));
+    CHECK(prop.ty->is<AstTypeReference>());
+    CHECK(prop.location == Location({2, 12}, {2, 24}));
+
+    AstDeclaredExternTypeProperty& method = declaredExternType->props.data[1];
+    CHECK(method.name == "method");
+    CHECK(method.nameLocation == Location({3, 21}, {3, 27}));
+    CHECK(method.ty->is<AstTypeFunction>());
+    CHECK(method.location == Location({3, 12}, {3, 54}));
+    CHECK(method.isMethod);
+
+    AstStatDeclareExternType* subclass = stat->body.data[1]->as<AstStatDeclareExternType>();
+    REQUIRE(subclass);
+    REQUIRE(subclass->superName);
+    CHECK(subclass->name == "Bar");
+    CHECK(*subclass->superName == "Foo");
+
+    REQUIRE_EQ(subclass->props.size, 1);
+    AstDeclaredExternTypeProperty& prop2 = subclass->props.data[0];
+    CHECK(prop2.name == "prop2");
+    CHECK(prop2.nameLocation == Location({7, 12}, {7, 17}));
+    CHECK(prop2.ty->is<AstTypeReference>());
+    CHECK(prop2.location == Location({7, 12}, {7, 25}));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
+{
+    ScopedFastFlag sff{FFlag::LuauDeclareExternType, true};
+
+    ParseResult result = tryParse(R"(
+        declare extern type Foo
+            prop: number
+            function method(self, foo: number): string
+        end
+
+        declare extern type Bar extends Foo
+            prop2: string
+        end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK("Expected `with` keyword before listing properties of the external type, but got prop instead" == result.errors[0].getMessage());
+    CHECK("Expected `with` keyword before listing properties of the external type, but got prop2 instead" == result.errors[1].getMessage());
+
+    AstStatBlock* stat = result.root;
+
+    REQUIRE_EQ(stat->body.size, 2);
+
+    AstStatDeclareExternType* declaredExternType = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaredExternType);
+    CHECK(declaredExternType->name == "Foo");
+    CHECK(!declaredExternType->superName);
+
+    REQUIRE_EQ(declaredExternType->props.size, 2);
+
+    AstDeclaredExternTypeProperty& prop = declaredExternType->props.data[0];
+    CHECK(prop.name == "prop");
+    CHECK(prop.nameLocation == Location({2, 12}, {2, 16}));
+    CHECK(prop.ty->is<AstTypeReference>());
+    CHECK(prop.location == Location({2, 12}, {2, 24}));
+
+    AstDeclaredExternTypeProperty& method = declaredExternType->props.data[1];
+    CHECK(method.name == "method");
+    CHECK(method.nameLocation == Location({3, 21}, {3, 27}));
+    CHECK(method.ty->is<AstTypeFunction>());
+    CHECK(method.location == Location({3, 12}, {3, 54}));
+    CHECK(method.isMethod);
+
+    AstStatDeclareExternType* subclass = stat->body.data[1]->as<AstStatDeclareExternType>();
+    REQUIRE(subclass);
+    REQUIRE(subclass->superName);
+    CHECK(subclass->name == "Bar");
+    CHECK(*subclass->superName == "Foo");
+
+    REQUIRE_EQ(subclass->props.size, 1);
+    AstDeclaredExternTypeProperty& prop2 = subclass->props.data[0];
+    CHECK(prop2.name == "prop2");
+    CHECK(prop2.nameLocation == Location({7, 12}, {7, 17}));
+    CHECK(prop2.ty->is<AstTypeReference>());
+    CHECK(prop2.location == Location({7, 12}, {7, 25}));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations")
+{
+    ScopedFastFlag sff{FFlag::LuauDeclareExternType, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Foo with
+            prop: number
+            function method(self, foo: number): string
+        end
+
+        declare extern type Bar extends Foo with
+            prop2: string
+        end
+    )")
+                             .root;
+
+    REQUIRE_EQ(stat->body.size, 2);
+
+    AstStatDeclareExternType* declaredExternType = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaredExternType);
+    CHECK(declaredExternType->name == "Foo");
+    CHECK(!declaredExternType->superName);
+
+    REQUIRE_EQ(declaredExternType->props.size, 2);
+
+    AstDeclaredExternTypeProperty& prop = declaredExternType->props.data[0];
+    CHECK(prop.name == "prop");
+    CHECK(prop.nameLocation == Location({2, 12}, {2, 16}));
+    CHECK(prop.ty->is<AstTypeReference>());
+    CHECK(prop.location == Location({2, 12}, {2, 24}));
+
+    AstDeclaredExternTypeProperty& method = declaredExternType->props.data[1];
+    CHECK(method.name == "method");
+    CHECK(method.nameLocation == Location({3, 21}, {3, 27}));
+    CHECK(method.ty->is<AstTypeFunction>());
+    CHECK(method.location == Location({3, 12}, {3, 54}));
+    CHECK(method.isMethod);
+
+    AstStatDeclareExternType* subclass = stat->body.data[1]->as<AstStatDeclareExternType>();
+    REQUIRE(subclass);
+    REQUIRE(subclass->superName);
+    CHECK(subclass->name == "Bar");
+    CHECK(*subclass->superName == "Foo");
+
+    REQUIRE_EQ(subclass->props.size, 1);
+    AstDeclaredExternTypeProperty& prop2 = subclass->props.data[0];
+    CHECK(prop2.name == "prop2");
+    CHECK(prop2.nameLocation == Location({7, 12}, {7, 17}));
+    CHECK(prop2.ty->is<AstTypeReference>());
+    CHECK(prop2.location == Location({7, 12}, {7, 25}));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
+{
+    ScopedFastFlag sff{FFlag::LuauDeclareExternType, true};
+
+    ParseResult result = tryParse(R"(
+        declare extern type Foo
+            prop: number
+            function method(self, foo: number): string
+        end
+
+        declare extern type Bar extends Foo
+            prop2: string
+        end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK("Expected `with` keyword before listing properties of the external type, but got prop instead" == result.errors[0].getMessage());
+    CHECK("Expected `with` keyword before listing properties of the external type, but got prop2 instead" == result.errors[1].getMessage());
+
+    AstStatBlock* stat = result.root;
+
+    REQUIRE_EQ(stat->body.size, 2);
+
+    AstStatDeclareExternType* declaredExternType = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaredExternType);
+    CHECK(declaredExternType->name == "Foo");
+    CHECK(!declaredExternType->superName);
+
+    REQUIRE_EQ(declaredExternType->props.size, 2);
+
+    AstDeclaredExternTypeProperty& prop = declaredExternType->props.data[0];
+    CHECK(prop.name == "prop");
+    CHECK(prop.nameLocation == Location({2, 12}, {2, 16}));
+    CHECK(prop.ty->is<AstTypeReference>());
+    CHECK(prop.location == Location({2, 12}, {2, 24}));
+
+    AstDeclaredExternTypeProperty& method = declaredExternType->props.data[1];
+    CHECK(method.name == "method");
+    CHECK(method.nameLocation == Location({3, 21}, {3, 27}));
+    CHECK(method.ty->is<AstTypeFunction>());
+    CHECK(method.location == Location({3, 12}, {3, 54}));
+    CHECK(method.isMethod);
+
+    AstStatDeclareExternType* subclass = stat->body.data[1]->as<AstStatDeclareExternType>();
+    REQUIRE(subclass);
+    REQUIRE(subclass->superName);
+    CHECK(subclass->name == "Bar");
+    CHECK(*subclass->superName == "Foo");
+
+    REQUIRE_EQ(subclass->props.size, 1);
+    AstDeclaredExternTypeProperty& prop2 = subclass->props.data[0];
     CHECK(prop2.name == "prop2");
     CHECK(prop2.nameLocation == Location({7, 12}, {7, 17}));
     CHECK(prop2.ty->is<AstTypeReference>());
@@ -2009,7 +2306,7 @@ TEST_CASE_FIXTURE(Fixture, "class_method_properties")
 
     REQUIRE_EQ(1, p1.root->body.size);
 
-    AstStatDeclareClass* klass = p1.root->body.data[0]->as<AstStatDeclareClass>();
+    AstStatDeclareExternType* klass = p1.root->body.data[0]->as<AstStatDeclareExternType>();
     REQUIRE(klass != nullptr);
 
     CHECK_EQ(2, klass->props.size);
@@ -2026,7 +2323,7 @@ TEST_CASE_FIXTURE(Fixture, "class_method_properties")
 
     REQUIRE_EQ(1, p2.root->body.size);
 
-    AstStatDeclareClass* klass2 = p2.root->body.data[0]->as<AstStatDeclareClass>();
+    AstStatDeclareExternType* klass2 = p2.root->body.data[0]->as<AstStatDeclareExternType>();
     REQUIRE(klass2 != nullptr);
 
     CHECK_EQ(2, klass2->props.size);
@@ -2044,13 +2341,13 @@ TEST_CASE_FIXTURE(Fixture, "class_indexer")
 
     REQUIRE_EQ(stat->body.size, 1);
 
-    AstStatDeclareClass* declaredClass = stat->body.data[0]->as<AstStatDeclareClass>();
-    REQUIRE(declaredClass);
-    REQUIRE(declaredClass->indexer);
-    REQUIRE(declaredClass->indexer->indexType->is<AstTypeReference>());
-    CHECK(declaredClass->indexer->indexType->as<AstTypeReference>()->name == "string");
-    REQUIRE(declaredClass->indexer->resultType->is<AstTypeReference>());
-    CHECK(declaredClass->indexer->resultType->as<AstTypeReference>()->name == "number");
+    AstStatDeclareExternType* declaredExternType = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaredExternType);
+    REQUIRE(declaredExternType->indexer);
+    REQUIRE(declaredExternType->indexer->indexType->is<AstTypeReference>());
+    CHECK(declaredExternType->indexer->indexType->as<AstTypeReference>()->name == "string");
+    REQUIRE(declaredExternType->indexer->resultType->is<AstTypeReference>());
+    CHECK(declaredExternType->indexer->resultType->as<AstTypeReference>()->name == "number");
 
     const ParseResult p1 = matchParseError(
         R"(
@@ -2060,12 +2357,12 @@ TEST_CASE_FIXTURE(Fixture, "class_indexer")
             [number]: number
         end
         )",
-        "Cannot have more than one class indexer"
+        (FFlag::LuauDeclareExternType) ? "Cannot have more than one indexer on an extern type" : "Cannot have more than one class indexer"
     );
 
     REQUIRE_EQ(1, p1.root->body.size);
 
-    AstStatDeclareClass* klass = p1.root->body.data[0]->as<AstStatDeclareClass>();
+    AstStatDeclareExternType* klass = p1.root->body.data[0]->as<AstStatDeclareExternType>();
     REQUIRE(klass != nullptr);
     CHECK(klass->indexer);
 }
@@ -2095,8 +2392,15 @@ TEST_CASE_FIXTURE(Fixture, "parse_variadics")
     REQUIRE(fnFoo);
     CHECK_EQ(fnFoo->argTypes.types.size, 2);
     CHECK(fnFoo->argTypes.tailType);
-    CHECK_EQ(fnFoo->returnTypes.types.size, 0);
-    CHECK(fnFoo->returnTypes.tailType);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        CHECK(fnFoo->returnTypes->is<AstTypePackVariadic>());
+    }
+    else
+    {
+        CHECK_EQ(fnFoo->returnTypes_DEPRECATED.types.size, 0);
+        CHECK(fnFoo->returnTypes_DEPRECATED.tailType);
+    }
 
     AstStatTypeAlias* bar = stat->body.data[2]->as<AstStatTypeAlias>();
     REQUIRE(bar);
@@ -2104,8 +2408,18 @@ TEST_CASE_FIXTURE(Fixture, "parse_variadics")
     REQUIRE(fnBar);
     CHECK_EQ(fnBar->argTypes.types.size, 0);
     CHECK(!fnBar->argTypes.tailType);
-    CHECK_EQ(fnBar->returnTypes.types.size, 1);
-    CHECK(fnBar->returnTypes.tailType);
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        auto returnTypePack = fnBar->returnTypes->as<AstTypePackExplicit>();
+        REQUIRE(returnTypePack);
+        CHECK_EQ(returnTypePack->typeList.types.size, 1);
+        CHECK(returnTypePack->typeList.tailType);
+    }
+    else
+    {
+        CHECK_EQ(fnBar->returnTypes_DEPRECATED.types.size, 1);
+        CHECK(fnBar->returnTypes_DEPRECATED.tailType);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "variadics_must_be_last")
@@ -2171,7 +2485,8 @@ TEST_CASE_FIXTURE(Fixture, "generic_pack_parsing")
     REQUIRE(argAnnot != nullptr);
     CHECK(argAnnot->genericName == "a");
 
-    AstTypePackGeneric* retAnnot = fnTy->returnTypes.tailType->as<AstTypePackGeneric>();
+    AstTypePackGeneric* retAnnot = FFlag::LuauStoreReturnTypesAsPackOnAst ? fnTy->returnTypes->as<AstTypePackGeneric>()
+                                                                          : fnTy->returnTypes_DEPRECATED.tailType->as<AstTypePackGeneric>();
     REQUIRE(retAnnot != nullptr);
     CHECK(retAnnot->genericName == "b");
 }
@@ -2256,7 +2571,9 @@ TEST_CASE_FIXTURE(Fixture, "function_type_named_arguments")
         REQUIRE_EQ(func->argNames.size, 3);
         REQUIRE(func->argNames.data[2]);
         CHECK_EQ(func->argNames.data[2]->first, "c");
-        AstTypeFunction* funcRet = func->returnTypes.types.data[0]->as<AstTypeFunction>();
+        AstTypeFunction* funcRet = FFlag::LuauStoreReturnTypesAsPackOnAst
+                                       ? func->returnTypes->as<AstTypePackExplicit>()->typeList.types.data[0]->as<AstTypeFunction>()
+                                       : func->returnTypes_DEPRECATED.types.data[0]->as<AstTypeFunction>();
         REQUIRE(funcRet != nullptr);
         REQUIRE_EQ(funcRet->argTypes.types.size, 3);
         REQUIRE_EQ(funcRet->argNames.size, 3);
@@ -2429,7 +2746,6 @@ TEST_CASE_FIXTURE(Fixture, "invalid_user_defined_type_functions")
 
 TEST_CASE_FIXTURE(Fixture, "leading_union_intersection_with_single_type_preserves_the_union_intersection_ast_node")
 {
-    ScopedFastFlag _{FFlag::LuauPreserveUnionIntersectionNodeForLeadingTokenSingleType, true};
     AstStatBlock* block = parse(R"(
         type Foo = | string
         type Bar = & number
@@ -2454,8 +2770,6 @@ TEST_CASE_FIXTURE(Fixture, "leading_union_intersection_with_single_type_preserve
 
 TEST_CASE_FIXTURE(Fixture, "parse_simple_ast_type_group")
 {
-    ScopedFastFlag _{FFlag::LuauAstTypeGroup3, true};
-
     AstStatBlock* stat = parse(R"(
         type Foo = (string)
     )");
@@ -2472,8 +2786,6 @@ TEST_CASE_FIXTURE(Fixture, "parse_simple_ast_type_group")
 
 TEST_CASE_FIXTURE(Fixture, "parse_nested_ast_type_group")
 {
-    ScopedFastFlag _{FFlag::LuauAstTypeGroup3, true};
-
     AstStatBlock* stat = parse(R"(
         type Foo = ((string))
     )");
@@ -2493,8 +2805,6 @@ TEST_CASE_FIXTURE(Fixture, "parse_nested_ast_type_group")
 
 TEST_CASE_FIXTURE(Fixture, "parse_return_type_ast_type_group")
 {
-    ScopedFastFlag _{FFlag::LuauAstTypeGroup3, true};
-
     AstStatBlock* stat = parse(R"(
         type Foo = () -> (string)
     )");
@@ -2507,9 +2817,20 @@ TEST_CASE_FIXTURE(Fixture, "parse_return_type_ast_type_group")
     auto funcType = alias1->type->as<AstTypeFunction>();
     REQUIRE(funcType);
 
-    REQUIRE_EQ(1, funcType->returnTypes.types.size);
-    REQUIRE(!funcType->returnTypes.tailType);
-    CHECK(funcType->returnTypes.types.data[0]->is<AstTypeGroup>());
+    if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+    {
+        auto returnTypePack = funcType->returnTypes->as<AstTypePackExplicit>();
+        REQUIRE(returnTypePack);
+        REQUIRE_EQ(1, returnTypePack->typeList.types.size);
+        REQUIRE(!returnTypePack->typeList.tailType);
+        CHECK(returnTypePack->typeList.types.data[0]->is<AstTypeGroup>());
+    }
+    else
+    {
+        REQUIRE_EQ(1, funcType->returnTypes_DEPRECATED.types.size);
+        REQUIRE(!funcType->returnTypes_DEPRECATED.tailType);
+        CHECK(funcType->returnTypes_DEPRECATED.types.data[0]->is<AstTypeGroup>());
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "inner_and_outer_scope_of_functions_have_correct_end_position")
@@ -2531,8 +2852,6 @@ TEST_CASE_FIXTURE(Fixture, "inner_and_outer_scope_of_functions_have_correct_end_
 
 TEST_CASE_FIXTURE(Fixture, "do_block_end_location_is_after_end_token")
 {
-    ScopedFastFlag _{FFlag::LuauFixDoBlockEndLocation, true};
-
     AstStatBlock* stat = parse(R"(
         do
             local x = 1
@@ -2548,8 +2867,6 @@ TEST_CASE_FIXTURE(Fixture, "do_block_end_location_is_after_end_token")
 
 TEST_CASE_FIXTURE(Fixture, "function_start_locations_are_before_attributes")
 {
-    ScopedFastFlag _{FFlag::LuauFixFunctionWithAttributesStartLocation, true};
-
     AstStatBlock* stat = parse(R"(
         @native
         function globalFunction()
@@ -2578,6 +2895,31 @@ TEST_CASE_FIXTURE(Fixture, "function_start_locations_are_before_attributes")
     REQUIRE_EQ(localVariable->values.size, 1);
     auto anonymousFunction = localVariable->values.data[0]->as<AstExprFunction>();
     CHECK_EQ(anonymousFunction->location, Location({9, 18}, {10, 11}));
+}
+
+TEST_CASE_FIXTURE(Fixture, "for_loop_with_single_var_has_comma_positions_of_size_zero")
+{
+    ScopedFastFlag _{FFlag::LuauStoreCSTData2, true};
+
+    ParseOptions parseOptions;
+    parseOptions.storeCstData = true;
+
+    ParseResult result = parseEx(
+        R"(
+        for value in tbl do
+        end
+    )",
+        parseOptions
+    );
+    REQUIRE(result.root);
+    REQUIRE_EQ(1, result.root->body.size);
+
+    auto forLoop = result.root->body.data[0]->as<AstStatForIn>();
+    auto baseCstNode = result.cstNodeMap.find(forLoop);
+    REQUIRE(baseCstNode);
+
+    auto cstNode = (*baseCstNode)->as<CstStatForIn>();
+    CHECK_EQ(cstNode->varsCommaPositions.size, 0);
 }
 
 TEST_SUITE_END();
@@ -3024,8 +3366,6 @@ TEST_CASE_FIXTURE(Fixture, "AstName_comparison")
 
 TEST_CASE_FIXTURE(Fixture, "generic_type_list_recovery")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
-
     try
     {
         parse(R"(
@@ -3829,7 +4169,6 @@ TEST_CASE_FIXTURE(Fixture, "mixed_leading_intersection_and_union_not_allowed")
 
 TEST_CASE_FIXTURE(Fixture, "grouped_function_type")
 {
-    ScopedFastFlag _{FFlag::LuauAllowComplexTypesInGenericParams, true};
     const auto root = parse(R"(
         type X<T> = T
         local x: X<(() -> ())?>
@@ -3850,23 +4189,14 @@ TEST_CASE_FIXTURE(Fixture, "grouped_function_type")
     auto unionTy = paramTy.type->as<AstTypeUnion>();
     LUAU_ASSERT(unionTy);
     CHECK_EQ(unionTy->types.size, 2);
-    if (FFlag::LuauAstTypeGroup3)
-    {
-        auto groupTy = unionTy->types.data[0]->as<AstTypeGroup>(); // (() -> ())
-        REQUIRE(groupTy);
-        CHECK(groupTy->type->is<AstTypeFunction>()); // () -> ()
-    }
-    else
-        CHECK(unionTy->types.data[0]->is<AstTypeFunction>()); // () -> ()
-    if (FFlag::LuauParseOptionalAsNode2)
-        CHECK(unionTy->types.data[1]->is<AstTypeOptional>()); // ?
-    else
-        CHECK(unionTy->types.data[1]->is<AstTypeReference>()); // nil
+    auto groupTy = unionTy->types.data[0]->as<AstTypeGroup>(); // (() -> ())
+    REQUIRE(groupTy);
+    CHECK(groupTy->type->is<AstTypeFunction>());          // () -> ()
+    CHECK(unionTy->types.data[1]->is<AstTypeOptional>()); // ?
 }
 
 TEST_CASE_FIXTURE(Fixture, "complex_union_in_generic_ty")
 {
-    ScopedFastFlag _{FFlag::LuauAllowComplexTypesInGenericParams, true};
     const auto root = parse(R"(
         type X<T> = T
         local x: X<
@@ -3903,7 +4233,6 @@ TEST_CASE_FIXTURE(Fixture, "complex_union_in_generic_ty")
 
 TEST_CASE_FIXTURE(Fixture, "recover_from_bad_table_type")
 {
-    ScopedFastFlag _{FFlag::LuauErrorRecoveryForTableTypes, true};
     ParseOptions opts;
     opts.allowDeclarationSyntax = true;
     const auto result = tryParse(
@@ -3940,7 +4269,6 @@ TEST_CASE_FIXTURE(Fixture, "function_name_has_correct_start_location")
 
 TEST_CASE_FIXTURE(Fixture, "stat_end_includes_semicolon_position")
 {
-    ScopedFastFlag _{FFlag::LuauExtendStatEndPosWithSemicolon, true};
     AstStatBlock* block = parse(R"(
         local x = 1
         local y = 2;

@@ -10,6 +10,9 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/Unifier2.h"
 
+LUAU_FASTFLAGVARIABLE(LuauArityMismatchOnUndersaturatedUnknownArguments)
+LUAU_FASTFLAG(LuauClipVariadicAnysFromArgsToGenericFuncs2)
+
 namespace Luau
 {
 
@@ -37,7 +40,7 @@ OverloadResolver::OverloadResolver(
 {
 }
 
-std::pair<OverloadResolver::Analysis, TypeId> OverloadResolver::selectOverload(TypeId ty, TypePackId argsPack)
+std::pair<OverloadResolver::Analysis, TypeId> OverloadResolver::selectOverload(TypeId ty, TypePackId argsPack, bool useFreeTypeBounds)
 {
     auto tryOne = [&](TypeId f)
     {
@@ -47,6 +50,9 @@ std::pair<OverloadResolver::Analysis, TypeId> OverloadResolver::selectOverload(T
             subtyping.variance = Subtyping::Variance::Contravariant;
             SubtypingResult r = subtyping.isSubtype(argsPack, ftv->argTypes, scope);
             subtyping.variance = variance;
+
+            if (!useFreeTypeBounds && !r.assumedConstraints.empty())
+                return false;
 
             if (r.isSubtype)
                 return true;
@@ -254,19 +260,55 @@ std::pair<OverloadResolver::Analysis, ErrorVec> OverloadResolver::checkOverload_
             }
 
             // If any of the unsatisfied arguments are not supertypes of
-            // nil, then this overload does not match.
+            // nil or are `unknown`, then this overload does not match.
             for (size_t i = firstUnsatisfiedArgument; i < requiredHead.size(); ++i)
             {
-                if (!subtyping.isSubtype(builtinTypes->nilType, requiredHead[i], scope).isSubtype)
+                if (FFlag::LuauArityMismatchOnUndersaturatedUnknownArguments)
                 {
-                    auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
-                    TypeError error{fnExpr->location, CountMismatch{minParams, optMaxParams, args->head.size(), CountMismatch::Arg, isVariadic}};
+                    if (get<UnknownType>(follow(requiredHead[i])) || !subtyping.isSubtype(builtinTypes->nilType, requiredHead[i], scope).isSubtype)
+                    {
+                        auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
+                        for (auto arg : fn->argTypes)
+                            if (get<UnknownType>(follow(arg)))
+                                minParams += 1;
 
-                    return {Analysis::ArityMismatch, {error}};
+                        TypeError error{fnExpr->location, CountMismatch{minParams, optMaxParams, args->head.size(), CountMismatch::Arg, isVariadic}};
+
+                        return {Analysis::ArityMismatch, {error}};
+                    }
+                }
+                else
+                {
+                    if (!subtyping.isSubtype(builtinTypes->nilType, requiredHead[i], scope).isSubtype)
+                    {
+                        auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
+                        TypeError error{fnExpr->location, CountMismatch{minParams, optMaxParams, args->head.size(), CountMismatch::Arg, isVariadic}};
+
+                        return {Analysis::ArityMismatch, {error}};
+                    }
                 }
             }
 
             return {Analysis::Ok, {}};
+        }
+
+        if (FFlag::LuauClipVariadicAnysFromArgsToGenericFuncs2)
+        {
+            if (reason.subPath == TypePath::Path{{TypePath::PackField::Arguments, TypePath::PackField::Tail}} && reason.superPath == justArguments)
+            {
+                // We have an arity mismatch if the argument tail is a generic type pack
+                if (auto fnArgs = get<TypePack>(fn->argTypes))
+                {
+                    // TODO: Determine whether arguments have incorrect type, incorrect count, or both (CLI-152070)
+                    if (get<GenericTypePack>(fnArgs->tail))
+                    {
+                        auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
+                        TypeError error{fnExpr->location, CountMismatch{minParams, optMaxParams, args->head.size(), CountMismatch::Arg}};
+
+                        return {Analysis::ArityMismatch, {error}};
+                    }
+                }
+            }
         }
     }
 
@@ -422,7 +464,7 @@ static std::optional<TypeId> selectOverload(
 {
     auto resolver =
         std::make_unique<OverloadResolver>(builtinTypes, arena, simplifier, normalizer, typeFunctionRuntime, scope, iceReporter, limits, location);
-    auto [status, overload] = resolver->selectOverload(fn, argsPack);
+    auto [status, overload] = resolver->selectOverload(fn, argsPack, /*useFreeTypeBounds*/ false);
 
     if (status == OverloadResolver::Analysis::Ok)
         return overload;
@@ -454,7 +496,7 @@ SolveResult solveFunctionCall(
 
     TypePackId resultPack = arena->freshTypePack(scope);
 
-    TypeId inferredTy = arena->addType(FunctionType{TypeLevel{}, scope.get(), argsPack, resultPack});
+    TypeId inferredTy = arena->addType(FunctionType{TypeLevel{}, argsPack, resultPack});
     Unifier2 u2{NotNull{arena}, builtinTypes, scope, iceReporter};
 
     const bool occursCheckPassed = u2.unify(*overloadToUse, inferredTy);

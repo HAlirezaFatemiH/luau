@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Luau/Constraint.h"
+#include "Luau/ConstraintSet.h"
 #include "Luau/DataFlowGraph.h"
 #include "Luau/DenseHash.h"
 #include "Luau/EqSatSimplification.h"
@@ -87,6 +88,7 @@ struct ConstraintSolver
     NotNull<Simplifier> simplifier;
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     // The entire set of constraints that the solver is trying to resolve.
+    ConstraintSet constraintSet;
     std::vector<NotNull<Constraint>> constraints;
     NotNull<DenseHashMap<Scope*, TypeId>> scopeToFunction;
     NotNull<Scope> rootScope;
@@ -144,6 +146,19 @@ struct ConstraintSolver
         NotNull<Normalizer> normalizer,
         NotNull<Simplifier> simplifier,
         NotNull<TypeFunctionRuntime> typeFunctionRuntime,
+        ModuleName moduleName,
+        NotNull<ModuleResolver> moduleResolver,
+        std::vector<RequireCycle> requireCycles,
+        DcrLogger* logger,
+        NotNull<const DataFlowGraph> dfg,
+        TypeCheckLimits limits,
+        ConstraintSet constraintSet
+    );
+
+    explicit ConstraintSolver(
+        NotNull<Normalizer> normalizer,
+        NotNull<Simplifier> simplifier,
+        NotNull<TypeFunctionRuntime> typeFunctionRuntime,
         NotNull<Scope> rootScope,
         std::vector<NotNull<Constraint>> constraints,
         NotNull<DenseHashMap<Scope*, TypeId>> scopeToFunction,
@@ -174,6 +189,9 @@ struct ConstraintSolver
     bool isDone() const;
 
 private:
+    /// A helper that does most of the setup work that is shared between the two constructors.
+    void initFreeTypeTracking();
+
     void generalizeOneType(TypeId ty);
 
     /**
@@ -207,7 +225,7 @@ public:
     bool tryDispatch(const IterableConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const NameConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint);
-    bool tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint);
+    bool tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const TableCheckConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const FunctionCheckConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const PrimitiveTypeConstraint& c, NotNull<const Constraint> constraint);
@@ -230,6 +248,8 @@ public:
     bool tryDispatch(const ReduceConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const ReducePackConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const EqualityConstraint& c, NotNull<const Constraint> constraint);
+
+    bool tryDispatch(const SimplifyConstraint& c, NotNull<const Constraint> constraint);
 
     // for a, ... in some_table do
     // also handles __iter metamethod
@@ -431,6 +451,18 @@ public:
 
     void fillInDiscriminantTypes(NotNull<const Constraint> constraint, const std::vector<std::optional<TypeId>>& discriminantTypes);
 };
+
+/** Borrow a vector of pointers from a vector of owning pointers to constraints.
+ */
+std::vector<NotNull<Constraint>> borrowConstraints(const std::vector<ConstraintPtr>& constraints);
+
+std::pair<std::vector<TypeId>, std::vector<TypePackId>> saturateArguments(
+    TypeArena* arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    const TypeFun& fn,
+    const std::vector<TypeId>& rawTypeArguments,
+    const std::vector<TypePackId>& rawPackArguments
+);
 
 void dump(NotNull<Scope> rootScope, struct ToStringOptions& opts);
 

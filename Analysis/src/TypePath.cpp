@@ -14,7 +14,6 @@
 #include <type_traits>
 
 LUAU_FASTFLAG(LuauSolverV2);
-LUAU_FASTFLAGVARIABLE(LuauDisableNewSolverAssertsInMixedMode)
 
 // Maximum number of steps to follow when traversing a path. May not always
 // equate to the number of components in a path, depending on the traversal
@@ -157,16 +156,12 @@ Path PathBuilder::build()
 
 PathBuilder& PathBuilder::readProp(std::string name)
 {
-    if (!FFlag::LuauDisableNewSolverAssertsInMixedMode)
-        LUAU_ASSERT(FFlag::LuauSolverV2);
     components.push_back(Property{std::move(name), true});
     return *this;
 }
 
 PathBuilder& PathBuilder::writeProp(std::string name)
 {
-    if (!FFlag::LuauDisableNewSolverAssertsInMixedMode)
-        LUAU_ASSERT(FFlag::LuauSolverV2);
     components.push_back(Property{std::move(name), false});
     return *this;
 }
@@ -307,9 +302,9 @@ struct TraversalState
                 prop = &it->second;
             }
         }
-        else if (auto c = get<ClassType>(*currentType))
+        else if (auto c = get<ExternType>(*currentType))
         {
-            prop = lookupClassProp(c, property.name);
+            prop = lookupExternTypeProp(c, property.name);
         }
         // For a metatable type, the table takes priority; check that before
         // falling through to the metatable entry below.
@@ -461,7 +456,7 @@ struct TraversalState
                     indexer = &(*mtMt->indexer);
             }
             // Note: we don't appear to walk the class hierarchy for indexers
-            else if (auto ct = get<ClassType>(current); ct && ct->indexer)
+            else if (auto ct = get<ExternType>(current); ct && ct->indexer)
                 indexer = &(*ct->indexer);
 
             if (indexer)

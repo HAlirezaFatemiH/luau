@@ -4,7 +4,7 @@ if(EXT_PLATFORM_STRING)
     return()
 endif()
 
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.10)
 
 option(LUAU_BUILD_CLI "Build CLI" ON)
 option(LUAU_BUILD_TESTS "Build tests" ON)
@@ -44,6 +44,8 @@ if(NOT LUAU_DISABLE_CODEGEN)
     add_library(Luau.CodeGen STATIC)
 endif()
 add_library(Luau.VM STATIC)
+add_library(Luau.Require STATIC)
+add_library(Luau.RequireNavigator STATIC)
 add_library(isocline STATIC)
 
 if(LUAU_BUILD_CLI)
@@ -115,6 +117,15 @@ endif()
 target_compile_features(Luau.VM PRIVATE cxx_std_11)
 target_include_directories(Luau.VM PUBLIC VM/include)
 target_link_libraries(Luau.VM PUBLIC Luau.Common)
+
+target_compile_features(Luau.Require PUBLIC cxx_std_17)
+target_include_directories(Luau.Require PUBLIC Require/Runtime/include)
+target_link_libraries(Luau.Require PUBLIC Luau.VM)
+target_link_libraries(Luau.Require PRIVATE Luau.RequireNavigator)
+
+target_compile_features(Luau.RequireNavigator PUBLIC cxx_std_17)
+target_include_directories(Luau.RequireNavigator PUBLIC Require/Navigator/include)
+target_link_libraries(Luau.RequireNavigator PUBLIC Luau.Config)
 
 target_include_directories(isocline PUBLIC extern/isocline/include)
 
@@ -239,15 +250,15 @@ if(LUAU_BUILD_CLI)
     target_include_directories(Luau.Repl.CLI PRIVATE extern extern/isocline/include)
 
     if(NOT LUAU_DISABLE_CODEGEN)
-        target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.CLI.lib isocline)
+        target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline)
     else()
-        target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.VM Luau.CLI.lib isocline)
+        target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.VM Luau.Require Luau.CLI.lib isocline)
     endif()
 
     target_link_libraries(Luau.Repl.CLI PRIVATE osthreads)
     target_link_libraries(Luau.Analyze.CLI PRIVATE osthreads)
 
-    target_link_libraries(Luau.Analyze.CLI PRIVATE Luau.Analysis Luau.CLI.lib)
+    target_link_libraries(Luau.Analyze.CLI PRIVATE Luau.Analysis Luau.CLI.lib Luau.RequireNavigator)
 
     target_link_libraries(Luau.Ast.CLI PRIVATE Luau.Ast Luau.Analysis Luau.CLI.lib)
 
@@ -296,9 +307,9 @@ if(LUAU_BUILD_TESTS)
     target_compile_options(Luau.CLI.Test PRIVATE ${LUAU_OPTIONS})
     target_include_directories(Luau.CLI.Test PRIVATE extern CLI)
     if(NOT LUAU_DISABLE_CODEGEN)
-        target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.CLI.lib isocline)
+        target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline)
     else()
-        target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Config Luau.VM Luau.CLI.lib isocline)
+        target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Config Luau.VM Luau.Require Luau.CLI.lib isocline)
     endif()
     target_link_libraries(Luau.CLI.Test PRIVATE osthreads)
 

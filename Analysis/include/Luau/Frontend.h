@@ -166,6 +166,7 @@ struct Frontend
 
     // Parse module graph and prepare SourceNode/SourceModule data, including required dependencies without running typechecking
     void parse(const ModuleName& name);
+    void parseModules(const std::vector<ModuleName>& name);
 
     // Parse and typecheck module graph
     CheckResult check(const ModuleName& name, std::optional<FrontendOptions> optionOverride = {}); // new shininess
@@ -211,11 +212,6 @@ struct Frontend
     void queueModuleCheck(const std::vector<ModuleName>& names);
     void queueModuleCheck(const ModuleName& name);
     std::vector<ModuleName> checkQueuedModules(
-        std::optional<FrontendOptions> optionOverride = {},
-        std::function<void(std::function<void()> task)> executeTask = {},
-        std::function<bool(size_t done, size_t total)> progress = {}
-    );
-    std::vector<ModuleName> checkQueuedModules_DEPRECATED(
         std::optional<FrontendOptions> optionOverride = {},
         std::function<void(std::function<void()> task)> executeTask = {},
         std::function<bool(size_t done, size_t total)> progress = {}

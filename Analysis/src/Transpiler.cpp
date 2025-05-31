@@ -11,11 +11,8 @@
 #include <math.h>
 
 LUAU_FASTFLAG(LuauStoreCSTData2)
-LUAU_FASTFLAG(LuauExtendStatEndPosWithSemicolon)
-LUAU_FASTFLAG(LuauAstTypeGroup3)
-LUAU_FASTFLAG(LuauFixDoBlockEndLocation)
-LUAU_FASTFLAG(LuauParseOptionalAsNode2)
-LUAU_FASTFLAG(LuauFixFunctionWithAttributesStartLocation)
+LUAU_FASTFLAG(LuauStoreReturnTypesAsPackOnAst)
+LUAU_FASTFLAG(LuauStoreLocalAnnotationColonPositions)
 
 namespace
 {
@@ -332,7 +329,7 @@ struct Printer_DEPRECATED
         }
     }
 
-    void visualizeTypePackAnnotation(const AstTypePack& annotation, bool forVarArg)
+    void visualizeTypePackAnnotation(const AstTypePack& annotation, bool forVarArg, bool unconditionallyParenthesize = true)
     {
         advance(annotation.location.begin);
         if (const AstTypePackVariadic* variadicTp = annotation.as<AstTypePackVariadic>())
@@ -350,7 +347,7 @@ struct Printer_DEPRECATED
         else if (const AstTypePackExplicit* explicitTp = annotation.as<AstTypePackExplicit>())
         {
             LUAU_ASSERT(!forVarArg);
-            visualizeTypeList(explicitTp->typeList, true);
+            visualizeTypeList(explicitTp->typeList, unconditionallyParenthesize);
         }
         else
         {
@@ -369,7 +366,7 @@ struct Printer_DEPRECATED
         else if (typeCount == 1)
         {
             bool shouldParenthesize = unconditionallyParenthesize && (list.types.size == 0 || !list.types.data[0]->is<AstTypeGroup>());
-            if (FFlag::LuauAstTypeGroup3 ? shouldParenthesize : unconditionallyParenthesize)
+            if (shouldParenthesize)
                 writer.symbol("(");
 
             // Only variadic tail
@@ -382,7 +379,7 @@ struct Printer_DEPRECATED
                 visualizeTypeAnnotation(*list.types.data[0]);
             }
 
-            if (FFlag::LuauAstTypeGroup3 ? shouldParenthesize : unconditionallyParenthesize)
+            if (shouldParenthesize)
                 writer.symbol(")");
         }
         else
@@ -706,8 +703,6 @@ struct Printer_DEPRECATED
             writer.keyword("do");
             for (const auto& s : block->body)
                 visualize(*s);
-            if (!FFlag::LuauFixDoBlockEndLocation)
-                writer.advance(block->location.end);
             writeEnd(program.location);
         }
         else if (const auto& a = program.as<AstStatIf>())
@@ -1066,12 +1061,15 @@ struct Printer_DEPRECATED
 
         writer.symbol(")");
 
-        if (writeTypes && func.returnAnnotation)
+        if (writeTypes && (FFlag::LuauStoreReturnTypesAsPackOnAst ? func.returnAnnotation != nullptr : func.returnAnnotation_DEPRECATED.has_value()))
         {
             writer.symbol(":");
             writer.space();
 
-            visualizeTypeList(*func.returnAnnotation, false);
+            if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+                visualizeTypePackAnnotation(*func.returnAnnotation, false, false);
+            else
+                visualizeTypeList(*func.returnAnnotation_DEPRECATED, false);
         }
 
         visualizeBlock(*func.body);
@@ -1175,7 +1173,10 @@ struct Printer_DEPRECATED
             }
 
             writer.symbol("->");
-            visualizeTypeList(a->returnTypes, true);
+            if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+                visualizeTypePackAnnotation(*a->returnTypes, false);
+            else
+                visualizeTypeList(a->returnTypes_DEPRECATED, true);
         }
         else if (const auto& a = typeAnnotation.as<AstTypeTable>())
         {
@@ -1230,18 +1231,9 @@ struct Printer_DEPRECATED
                 AstType* l = a->types.data[0];
                 AstType* r = a->types.data[1];
 
-                if (FFlag::LuauParseOptionalAsNode2)
-                {
-                    auto lta = l->as<AstTypeReference>();
-                    if (lta && lta->name == "nil" && !r->is<AstTypeOptional>())
-                        std::swap(l, r);
-                }
-                else
-                {
-                    auto lta = l->as<AstTypeReference>();
-                    if (lta && lta->name == "nil")
-                        std::swap(l, r);
-                }
+                auto lta = l->as<AstTypeReference>();
+                if (lta && lta->name == "nil" && !r->is<AstTypeOptional>())
+                    std::swap(l, r);
 
                 // it's still possible that we had a (T | U) or (T | nil) and not (nil | T)
                 auto rta = r->as<AstTypeReference>();
@@ -1264,13 +1256,10 @@ struct Printer_DEPRECATED
 
             for (size_t i = 0; i < a->types.size; ++i)
             {
-                if (FFlag::LuauParseOptionalAsNode2)
+                if (a->types.data[i]->is<AstTypeOptional>())
                 {
-                    if (a->types.data[i]->is<AstTypeOptional>())
-                    {
-                        writer.symbol("?");
-                        continue;
-                    }
+                    writer.symbol("?");
+                    continue;
                 }
 
                 if (i > 0)
@@ -1356,20 +1345,21 @@ struct Printer
         return nullptr;
     }
 
-    void visualize(const AstLocal& local)
+    void visualize(const AstLocal& local, Position colonPosition)
     {
         advance(local.location.begin);
 
         writer.identifier(local.name.value);
         if (writeTypes && local.annotation)
         {
-            // TODO: handle spacing for type annotation
+            if (FFlag::LuauStoreLocalAnnotationColonPositions)
+                advance(colonPosition);
             writer.symbol(":");
             visualizeTypeAnnotation(*local.annotation);
         }
     }
 
-    void visualizeTypePackAnnotation(AstTypePack& annotation, bool forVarArg)
+    void visualizeTypePackAnnotation(AstTypePack& annotation, bool forVarArg, bool unconditionallyParenthesize = true)
     {
         advance(annotation.location.begin);
         if (const AstTypePackVariadic* variadicTp = annotation.as<AstTypePackVariadic>())
@@ -1391,10 +1381,14 @@ struct Printer
             LUAU_ASSERT(!forVarArg);
             if (const auto cstNode = lookupCstNode<CstTypePackExplicit>(explicitTp))
                 visualizeTypeList(
-                    explicitTp->typeList, true, cstNode->openParenthesesPosition, cstNode->closeParenthesesPosition, cstNode->commaPositions
+                    explicitTp->typeList,
+                    FFlag::LuauStoreReturnTypesAsPackOnAst ? cstNode->hasParentheses : true,
+                    cstNode->openParenthesesPosition,
+                    cstNode->closeParenthesesPosition,
+                    cstNode->commaPositions
                 );
             else
-                visualizeTypeList(explicitTp->typeList, true);
+                visualizeTypeList(explicitTp->typeList, unconditionallyParenthesize);
         }
         else
         {
@@ -1425,7 +1419,7 @@ struct Printer
         else if (typeCount == 1)
         {
             bool shouldParenthesize = unconditionallyParenthesize && (list.types.size == 0 || !list.types.data[0]->is<AstTypeGroup>());
-            if (FFlag::LuauAstTypeGroup3 ? shouldParenthesize : unconditionallyParenthesize)
+            if (shouldParenthesize)
             {
                 if (openParenthesesPosition)
                     advance(*openParenthesesPosition);
@@ -1444,7 +1438,7 @@ struct Printer
                 visualizeTypeAnnotation(*list.types.data[0]);
             }
 
-            if (FFlag::LuauAstTypeGroup3 ? shouldParenthesize : unconditionallyParenthesize)
+            if (shouldParenthesize)
             {
                 if (closeParenthesesPosition)
                     advance(*closeParenthesesPosition);
@@ -1499,8 +1493,7 @@ struct Printer
 
     void visualize(AstExpr& expr)
     {
-        if (!expr.is<AstExprFunction>() || FFlag::LuauFixFunctionWithAttributesStartLocation)
-            advance(expr.location.begin);
+        advance(expr.location.begin);
 
         if (const auto& a = expr.as<AstExprGroup>())
         {
@@ -1636,15 +1629,8 @@ struct Printer
         {
             for (const auto& attribute : a->attributes)
                 visualizeAttribute(*attribute);
-            if (FFlag::LuauFixFunctionWithAttributesStartLocation)
-            {
-                if (const auto cstNode = lookupCstNode<CstExprFunction>(a))
-                    advance(cstNode->functionKeywordPosition);
-            }
-            else
-            {
-                advance(a->location.begin);
-            }
+            if (const auto cstNode = lookupCstNode<CstExprFunction>(a))
+                advance(cstNode->functionKeywordPosition);
             writer.keyword("function");
             visualizeFunctionBody(*a);
         }
@@ -1896,8 +1882,7 @@ struct Printer
 
     void visualize(AstStat& program)
     {
-        if ((!program.is<AstStatLocalFunction>() && !program.is<AstStatFunction>()) || FFlag::LuauFixFunctionWithAttributesStartLocation)
-            advance(program.location.begin);
+        advance(program.location.begin);
 
         if (const auto& block = program.as<AstStatBlock>())
         {
@@ -1970,10 +1955,16 @@ struct Printer
             writer.keyword("local");
 
             CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-            for (const auto& local : a->vars)
+            for (size_t i = 0; i < a->vars.size; i++)
             {
                 varComma();
-                visualize(*local);
+                if (FFlag::LuauStoreLocalAnnotationColonPositions && cstNode)
+                {
+                    LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
+                    visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
+                }
+                else
+                    visualize(*a->vars.data[i], Position{0, 0});
             }
 
             if (a->equalsSignLocation)
@@ -1996,7 +1987,11 @@ struct Printer
 
             writer.keyword("for");
 
-            visualize(*a->var);
+            if (FFlag::LuauStoreLocalAnnotationColonPositions)
+                visualize(*a->var, cstNode ? cstNode->annotationColonPosition : Position{0, 0});
+            else
+                visualize(*a->var, Position{0, 0});
+
             if (cstNode)
                 advance(cstNode->equalsPosition);
             writer.symbol("=");
@@ -2026,10 +2021,16 @@ struct Printer
             writer.keyword("for");
 
             CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-            for (const auto& var : a->vars)
+            for (size_t i = 0; i < a->vars.size; i++)
             {
                 varComma();
-                visualize(*var);
+                if (FFlag::LuauStoreLocalAnnotationColonPositions && cstNode)
+                {
+                    LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
+                    visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
+                }
+                else
+                    visualize(*a->vars.data[i], Position{0, 0});
             }
 
             advance(a->inLocation.begin);
@@ -2136,15 +2137,8 @@ struct Printer
         {
             for (const auto& attribute : a->func->attributes)
                 visualizeAttribute(*attribute);
-            if (FFlag::LuauFixFunctionWithAttributesStartLocation)
-            {
-                if (const auto cstNode = lookupCstNode<CstStatFunction>(a))
-                    advance(cstNode->functionKeywordPosition);
-            }
-            else
-            {
-                advance(a->location.begin);
-            }
+            if (const auto cstNode = lookupCstNode<CstStatFunction>(a))
+                advance(cstNode->functionKeywordPosition);
             writer.keyword("function");
             visualize(*a->name);
             visualizeFunctionBody(*a->func);
@@ -2155,15 +2149,9 @@ struct Printer
                 visualizeAttribute(*attribute);
 
             const auto cstNode = lookupCstNode<CstStatLocalFunction>(a);
-            if (FFlag::LuauFixFunctionWithAttributesStartLocation)
-            {
-                if (cstNode)
-                    advance(cstNode->localKeywordPosition);
-            }
-            else
-            {
-                advance(a->location.begin);
-            }
+
+            if (cstNode)
+                advance(cstNode->localKeywordPosition);
 
             writer.keyword("local");
 
@@ -2317,8 +2305,6 @@ struct Printer
     {
         const auto cstNode = lookupCstNode<CstExprFunction>(&func);
 
-        // TODO(CLI-139347): need to handle return type (incl. parentheses of return type)
-
         if (func.generics.size > 0 || func.genericPacks.size > 0)
         {
             CommaSeparatorInserter comma(writer, cstNode ? cstNode->genericsCommaPositions.begin() : nullptr);
@@ -2362,6 +2348,11 @@ struct Printer
             writer.identifier(local->name.value);
             if (writeTypes && local->annotation)
             {
+                if (FFlag::LuauStoreReturnTypesAsPackOnAst && FFlag::LuauStoreLocalAnnotationColonPositions && cstNode)
+                {
+                    LUAU_ASSERT(cstNode->argsAnnotationColonPositions.size > i);
+                    advance(cstNode->argsAnnotationColonPositions.data[i]);
+                }
                 writer.symbol(":");
                 visualizeTypeAnnotation(*local->annotation);
             }
@@ -2375,6 +2366,11 @@ struct Printer
 
             if (func.varargAnnotation)
             {
+                if (FFlag::LuauStoreReturnTypesAsPackOnAst && FFlag::LuauStoreLocalAnnotationColonPositions && cstNode)
+                {
+                    LUAU_ASSERT(cstNode->varargAnnotationColonPosition != Position({0, 0}));
+                    advance(cstNode->varargAnnotationColonPosition);
+                }
                 writer.symbol(":");
                 visualizeTypePackAnnotation(*func.varargAnnotation, true);
             }
@@ -2384,14 +2380,23 @@ struct Printer
             advanceBefore(func.argLocation->end, 1);
         writer.symbol(")");
 
-        if (writeTypes && func.returnAnnotation)
+        if (writeTypes && FFlag::LuauStoreReturnTypesAsPackOnAst ? func.returnAnnotation != nullptr : func.returnAnnotation_DEPRECATED.has_value())
         {
             if (cstNode)
                 advance(cstNode->returnSpecifierPosition);
             writer.symbol(":");
-            writer.space();
 
-            visualizeTypeList(*func.returnAnnotation, false);
+            if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+            {
+                if (!cstNode)
+                    writer.space();
+                visualizeTypePackAnnotation(*func.returnAnnotation, false, false);
+            }
+            else
+            {
+                writer.space();
+                visualizeTypeList(*func.returnAnnotation_DEPRECATED, false);
+            }
         }
 
         visualizeBlock(*func.body);
@@ -2574,7 +2579,10 @@ struct Printer
             if (cstNode)
                 advance(cstNode->returnArrowPosition);
             writer.symbol("->");
-            visualizeTypeList(a->returnTypes, true);
+            if (FFlag::LuauStoreReturnTypesAsPackOnAst)
+                visualizeTypePackAnnotation(*a->returnTypes, false);
+            else
+                visualizeTypeList(a->returnTypes_DEPRECATED, true);
         }
         else if (const auto& a = typeAnnotation.as<AstTypeTable>())
         {
@@ -2647,6 +2655,7 @@ struct Printer
                             {
                                 advance(item.indexerOpenPosition);
                                 writer.symbol("[");
+                                advance(item.stringPosition);
                                 writer.sourceString(
                                     std::string_view(item.stringInfo->sourceString.data, item.stringInfo->sourceString.size),
                                     item.stringInfo->quoteStyle,
@@ -2741,18 +2750,9 @@ struct Printer
                 AstType* l = a->types.data[0];
                 AstType* r = a->types.data[1];
 
-                if (FFlag::LuauParseOptionalAsNode2)
-                {
-                    auto lta = l->as<AstTypeReference>();
-                    if (lta && lta->name == "nil" && !r->is<AstTypeOptional>())
-                        std::swap(l, r);
-                }
-                else
-                {
-                    auto lta = l->as<AstTypeReference>();
-                    if (lta && lta->name == "nil")
-                        std::swap(l, r);
-                }
+                auto lta = l->as<AstTypeReference>();
+                if (lta && lta->name == "nil" && !r->is<AstTypeOptional>())
+                    std::swap(l, r);
 
                 // it's still possible that we had a (T | U) or (T | nil) and not (nil | T)
                 auto rta = r->as<AstTypeReference>();
@@ -2782,21 +2782,17 @@ struct Printer
             size_t separatorIndex = 0;
             for (size_t i = 0; i < a->types.size; ++i)
             {
-                if (FFlag::LuauParseOptionalAsNode2)
+                if (const auto optional = a->types.data[i]->as<AstTypeOptional>())
                 {
-                    if (const auto optional = a->types.data[i]->as<AstTypeOptional>())
-                    {
-                        advance(optional->location.begin);
-                        writer.symbol("?");
-                        continue;
-                    }
+                    advance(optional->location.begin);
+                    writer.symbol("?");
+                    continue;
                 }
 
                 if (i > 0)
                 {
-                    if (cstNode && FFlag::LuauParseOptionalAsNode2)
+                    if (cstNode)
                     {
-                        // separatorIndex is only valid if `?` is handled as an AstTypeOptional
                         advance(cstNode->separatorPositions.data[separatorIndex]);
                         separatorIndex++;
                     }

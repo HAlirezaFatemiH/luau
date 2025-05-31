@@ -13,8 +13,6 @@
 
 LUAU_FASTFLAG(LuauSolverV2)
 
-LUAU_FASTFLAG(LuauExtendStatEndPosWithSemicolon)
-
 namespace Luau
 {
 
@@ -43,24 +41,13 @@ struct AutocompleteNodeFinder : public AstVisitor
 
     bool visit(AstStat* stat) override
     {
-        if (FFlag::LuauExtendStatEndPosWithSemicolon)
+        // Consider 'local myLocal = 4;|' and 'local myLocal = 4', where '|' is the cursor position. In both cases, the cursor position is equal
+        // to `AstStatLocal.location.end`. However, in the first case (semicolon), we are starting a new statement, whilst in the second case
+        // (no semicolon) we are still part of the AstStatLocal, hence the different comparison check.
+        if (stat->location.begin < pos && (stat->hasSemicolon ? pos < stat->location.end : pos <= stat->location.end))
         {
-            // Consider 'local myLocal = 4;|' and 'local myLocal = 4', where '|' is the cursor position. In both cases, the cursor position is equal
-            // to `AstStatLocal.location.end`. However, in the first case (semicolon), we are starting a new statement, whilst in the second case
-            // (no semicolon) we are still part of the AstStatLocal, hence the different comparison check.
-            if (stat->location.begin < pos && (stat->hasSemicolon ? pos < stat->location.end : pos <= stat->location.end))
-            {
-                ancestry.push_back(stat);
-                return true;
-            }
-        }
-        else
-        {
-            if (stat->location.begin < pos && pos <= stat->location.end)
-            {
-                ancestry.push_back(stat);
-                return true;
-            }
+            ancestry.push_back(stat);
+            return true;
         }
 
         return false;
@@ -587,11 +574,11 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
                             return checkOverloadedDocumentationSymbol(module, propIt->second.type(), parentExpr, propIt->second.documentationSymbol);
                     }
                 }
-                else if (const ClassType* ctv = get<ClassType>(parentTy))
+                else if (const ExternType* etv = get<ExternType>(parentTy))
                 {
-                    while (ctv)
+                    while (etv)
                     {
-                        if (auto propIt = ctv->props.find(indexName->index.value); propIt != ctv->props.end())
+                        if (auto propIt = etv->props.find(indexName->index.value); propIt != etv->props.end())
                         {
                             if (FFlag::LuauSolverV2)
                             {
@@ -603,7 +590,7 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
                                     module, propIt->second.type(), parentExpr, propIt->second.documentationSymbol
                                 );
                         }
-                        ctv = ctv->parent ? Luau::get<Luau::ClassType>(*ctv->parent) : nullptr;
+                        etv = etv->parent ? Luau::get<Luau::ExternType>(*etv->parent) : nullptr;
                     }
                 }
                 else if (const PrimitiveType* ptv = get<PrimitiveType>(parentTy); ptv && ptv->metatable)

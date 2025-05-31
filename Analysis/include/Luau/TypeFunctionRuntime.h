@@ -15,6 +15,8 @@ using lua_State = struct lua_State;
 namespace Luau
 {
 
+struct TypeFunctionRuntime;
+
 void* typeFunctionAlloc(void* ud, void* ptr, size_t osize, size_t nsize);
 
 // Replica of types from Type.h
@@ -205,7 +207,7 @@ struct TypeFunctionTableType
     std::optional<TypeFunctionTypeId> metatable;
 };
 
-struct TypeFunctionClassType
+struct TypeFunctionExternType
 {
     using Name = std::string;
     using Props = std::map<Name, TypeFunctionProperty>;
@@ -216,13 +218,10 @@ struct TypeFunctionClassType
 
     std::optional<TypeFunctionTypeId> metatable; // metaclass?
 
-    // this was mistaken, and we should actually be keeping separate read/write types here.
-    std::optional<TypeFunctionTypeId> parent_DEPRECATED;
-
     std::optional<TypeFunctionTypeId> readParent;
     std::optional<TypeFunctionTypeId> writeParent;
 
-    TypeId classTy;
+    TypeId externTy;
 };
 
 struct TypeFunctionGenericType
@@ -244,7 +243,7 @@ using TypeFunctionTypeVariant = Luau::Variant<
     TypeFunctionNegationType,
     TypeFunctionFunctionType,
     TypeFunctionTableType,
-    TypeFunctionClassType,
+    TypeFunctionExternType,
     TypeFunctionGenericType>;
 
 struct TypeFunctionType
@@ -276,6 +275,8 @@ T* getMutable(TypeFunctionTypeId tv)
 }
 
 std::optional<std::string> checkResultForError(lua_State* L, const char* typeFunctionName, int luaResult);
+
+TypeFunctionRuntime* getTypeFunctionRuntime(lua_State* L);
 
 TypeFunctionType* allocateTypeFunctionType(lua_State* L, TypeFunctionTypeVariant type);
 TypeFunctionTypePackVar* allocateTypeFunctionTypePack(lua_State* L, TypeFunctionTypePackVariant type);

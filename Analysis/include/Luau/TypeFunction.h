@@ -21,6 +21,8 @@ namespace Luau
 struct TypeArena;
 struct TxnLog;
 struct ConstraintSolver;
+struct TypeFunctionRuntimeBuilderState;
+struct TypeFunctionContext;
 class Normalizer;
 
 using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
@@ -53,6 +55,9 @@ struct TypeFunctionRuntime
 
     // Output created by 'print' function
     std::vector<std::string> messages;
+
+    // Type builder, valid for the duration of a single evaluation
+    TypeFunctionRuntimeBuilderState* runtimeBuilder = nullptr;
 
 private:
     void prepareState();
@@ -155,6 +160,9 @@ struct TypeFunction
 
     /// The reducer function for the type function.
     ReducerFunction<TypeId> reducer;
+
+    /// If true, this type function can reduce even if it is parameterized on a generic.
+    bool canReduceGenerics = false;
 };
 
 /// Represents a type function that may be applied to map a series of types and
@@ -167,6 +175,9 @@ struct TypePackFunction
 
     /// The reducer function for the type pack function.
     ReducerFunction<TypePackId> reducer;
+
+    /// If true, this type function can reduce even if it is parameterized on a generic.
+    bool canReduceGenerics = false;
 };
 
 struct FunctionGraphReductionResult
@@ -247,6 +258,8 @@ struct BuiltinTypeFunctions
 
     TypeFunction setmetatableFunc;
     TypeFunction getmetatableFunc;
+
+    TypeFunction weakoptionalFunc;
 
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };

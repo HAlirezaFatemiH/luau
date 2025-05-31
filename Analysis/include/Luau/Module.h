@@ -15,8 +15,6 @@
 #include <unordered_map>
 #include <optional>
 
-LUAU_FASTFLAG(LuauIncrementalAutocompleteCommentDetection)
-
 namespace Luau
 {
 
@@ -127,6 +125,9 @@ struct Module
     // Map AST nodes to the scope they create.  Cannot be NotNull<Scope> because
     // we need a sentinel value for the map.
     DenseHashMap<const AstNode*, Scope*> astScopes{nullptr};
+
+    // Stable references for type aliases registered in the environment
+    std::vector<std::unique_ptr<TypeFun>> typeFunctionAliases;
 
     std::unordered_map<Name, TypeId> declaredGlobals;
     ErrorVec errors;

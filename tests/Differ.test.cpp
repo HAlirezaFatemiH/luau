@@ -234,8 +234,6 @@ TEST_CASE_FIXTURE(DifferFixture, "right_cyclic_table_left_table_property_wrong")
 
 TEST_CASE_FIXTURE(DifferFixture, "equal_table_two_cyclic_tables_are_not_different")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
-
     CheckResult result = check(R"(
     local function id<a>(x: a): a
       return x
@@ -1473,8 +1471,6 @@ TEST_CASE_FIXTURE(DifferFixtureWithBuiltins, "equal_metatable")
 
 TEST_CASE_FIXTURE(DifferFixtureWithBuiltins, "metatable_normal")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
-
     CheckResult result = check(R"(
     local metaFoo = {
         metaBar = 5
@@ -1583,7 +1579,7 @@ TEST_CASE_FIXTURE(DifferFixtureWithBuiltins, "metatable_metamissing_right")
     );
 }
 
-TEST_CASE_FIXTURE(DifferFixtureGeneric<ClassFixture>, "equal_class")
+TEST_CASE_FIXTURE(DifferFixtureGeneric<ExternTypeFixture>, "equal_class")
 {
     CheckResult result = check(R"(
         local foo = BaseClass
@@ -1594,7 +1590,7 @@ TEST_CASE_FIXTURE(DifferFixtureGeneric<ClassFixture>, "equal_class")
     compareTypesEq("foo", "almostFoo");
 }
 
-TEST_CASE_FIXTURE(DifferFixtureGeneric<ClassFixture>, "class_normal")
+TEST_CASE_FIXTURE(DifferFixtureGeneric<ExternTypeFixture>, "class_normal")
 {
     CheckResult result = check(R"(
         local foo = BaseClass

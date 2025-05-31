@@ -12,7 +12,11 @@ using namespace Luau;
 LUAU_FASTFLAG(LuauSolverV2)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
-LUAU_FASTFLAG(LuauImproveTypePathsInErrors)
+LUAU_FASTFLAG(LuauEagerGeneralization2)
+LUAU_FASTFLAG(LuauReportSubtypingErrors)
+LUAU_FASTFLAG(LuauTrackInferredFunctionTypeFromCall)
+LUAU_FASTFLAG(LuauTableLiteralSubtypeSpecificCheck)
+LUAU_FASTFLAG(LuauFixEmptyTypePackStringification)
 
 TEST_SUITE_BEGIN("TypePackTests");
 
@@ -96,7 +100,10 @@ TEST_CASE_FIXTURE(Fixture, "higher_order_function")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    CHECK_EQ("<a, b..., c...>((b...) -> (c...), (a) -> (b...), a) -> (c...)", toString(requireType("apply")));
+    if (FFlag::LuauEagerGeneralization2)
+        CHECK_EQ("<a, b..., c...>((c...) -> (b...), (a) -> (c...), a) -> (b...)", toString(requireType("apply")));
+    else
+        CHECK_EQ("<a, b..., c...>((b...) -> (c...), (a) -> (b...), a) -> (c...)", toString(requireType("apply")));
 }
 
 TEST_CASE_FIXTURE(Fixture, "return_type_should_be_empty_if_nothing_is_returned")
@@ -333,7 +340,10 @@ local c: Packed<string, number, boolean>
     REQUIRE(ttvA->instantiatedTypeParams.size() == 1);
     REQUIRE(ttvA->instantiatedTypePackParams.size() == 1);
     CHECK_EQ(toString(ttvA->instantiatedTypeParams[0], {true}), "number");
-    CHECK_EQ(toString(ttvA->instantiatedTypePackParams[0], {true}), "");
+    if (FFlag::LuauFixEmptyTypePackStringification)
+        CHECK_EQ(toString(ttvA->instantiatedTypePackParams[0], {true}), "()");
+    else
+        CHECK_EQ(toString(ttvA->instantiatedTypePackParams[0], {true}), "");
 
     auto ttvB = get<TableType>(requireType("b"));
     REQUIRE(ttvB);
@@ -953,7 +963,7 @@ a = b
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    if (FFlag::LuauSolverV2 && FFlag::LuauImproveTypePathsInErrors)
+    if (FFlag::LuauSolverV2)
     {
 
         const std::string expected = "Type\n\t"
@@ -965,31 +975,12 @@ a = b
 
         CHECK(expected == toString(result.errors[0]));
     }
-    else if (FFlag::LuauSolverV2)
-    {
-        const std::string expected = "Type\n"
-                                     "    '() -> (number, ...boolean)'\n"
-                                     "could not be converted into\n"
-                                     "    '() -> (number, ...string)'; at returns().tail().variadic(), boolean is not a subtype of string";
-
-        CHECK(expected == toString(result.errors[0]));
-    }
-    else if (FFlag::LuauImproveTypePathsInErrors)
+    else
     {
         const std::string expected = R"(Type
 	'() -> (number, ...boolean)'
 could not be converted into
 	'() -> (number, ...string)'
-caused by:
-  Type 'boolean' could not be converted into 'string')";
-        CHECK_EQ(expected, toString(result.errors[0]));
-    }
-    else
-    {
-        const std::string expected = R"(Type
-    '() -> (number, ...boolean)'
-could not be converted into
-    '() -> (number, ...string)'
 caused by:
   Type 'boolean' could not be converted into 'string')";
         CHECK_EQ(expected, toString(result.errors[0]));
@@ -1073,6 +1064,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "detect_cyclic_typepacks")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "detect_cyclic_typepacks2")
 {
+    ScopedFastFlag sffs[] = {{FFlag::LuauReportSubtypingErrors, true}, {FFlag::LuauTrackInferredFunctionTypeFromCall, true}};
+
     CheckResult result = check(R"(
         function _(l0:((typeof((pcall)))|((((t0)->())|(typeof(-67108864)))|(any)))|(any),...):(((typeof(0))|(any))|(any),typeof(-67108864),any)
             xpcall(_,_,_)
@@ -1106,6 +1099,8 @@ TEST_CASE_FIXTURE(Fixture, "unify_variadic_tails_in_arguments")
 
 TEST_CASE_FIXTURE(Fixture, "unify_variadic_tails_in_arguments_free")
 {
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
+
     CheckResult result = check(R"(
         function foo<T...>(...: T...): T...
             return ...
@@ -1117,15 +1112,10 @@ TEST_CASE_FIXTURE(Fixture, "unify_variadic_tails_in_arguments_free")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    if (FFlag::LuauSolverV2 && FFlag::LuauImproveTypePathsInErrors)
+    if (FFlag::LuauSolverV2)
         CHECK(
             toString(result.errors.at(0)) == "Type pack '...number' could not be converted into 'boolean'; \nthis is because it has a tail of "
                                              "`...number`, which is not a subtype of `boolean`"
-        );
-    else if (FFlag::LuauSolverV2)
-        CHECK(
-            toString(result.errors.at(0)) ==
-            "Type pack '...number' could not be converted into 'boolean'; type ...number.tail() (...number) is not a subtype of boolean (boolean)"
         );
     else
         CHECK_EQ(toString(result.errors[0]), "Type 'number' could not be converted into 'boolean'");

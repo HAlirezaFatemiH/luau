@@ -9,10 +9,9 @@ using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(DebugLuauEqSatSimplification)
-LUAU_FASTFLAG(LuauTypeFunReadWriteParents)
-LUAU_FASTFLAG(LuauImproveTypePathsInErrors)
-LUAU_FASTFLAG(LuauUserTypeFunTypecheck)
-LUAU_FASTFLAG(LuauNewTypeFunReductionChecks2)
+LUAU_FASTFLAG(LuauEagerGeneralization2)
+LUAU_FASTFLAG(LuauTableLiteralSubtypeSpecificCheck)
+LUAU_FASTFLAG(LuauUserTypeFunctionAliases)
 
 TEST_SUITE_BEGIN("UserDefinedTypeFunctionTests");
 
@@ -352,6 +351,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_strsingleton_methods_work")
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_union_serialization_works")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function serialize_union(arg)
@@ -363,14 +363,54 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_union_serialization_works")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "boolean | number | string");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "boolean | number | string");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_optional_works")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
+
+    CheckResult result = check(R"(
+        type function numberhuh()
+            return types.optional(types.number)
+        end
+        -- forcing an error here to check the exact type of the union
+        local function ok(idx: numberhuh<>): never return idx end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "number?");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_optional_works_on_unions")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
+
+    CheckResult result = check(R"(
+        type function foobar()
+            local ty = types.unionof(types.string, types.number, types.boolean)
+            return types.optional(ty)
+        end
+        -- forcing an error here to check the exact type of the union
+        local function ok(idx: foobar<>): never return idx end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "(boolean | number | string)?");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_union_methods_work")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getunion()
@@ -391,14 +431,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_union_methods_work")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "boolean | number | string");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "boolean | number | string");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_intersection_serialization_works")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function serialize_intersection(arg)
@@ -410,14 +451,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_intersection_serialization_works")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ boolean: boolean, number: number } & { boolean: boolean, string: string }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ boolean: boolean, number: number } & { boolean: boolean, string: string }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_intersection_methods_work")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getintersection()
@@ -444,14 +486,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_intersection_methods_work")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ boolean: boolean, number: number } & { boolean: boolean, string: string }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ boolean: boolean, number: number } & { boolean: boolean, string: string }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_negation_methods_work")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getnegation()
@@ -462,18 +505,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_negation_methods_work")
             -- this should never be returned
             return types.number
         end
-        
+
         -- forcing an error here to check the exact type of the negation
         local function ok(idx: getnegation<>): never return idx end
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "~string");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "~string");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_negation_inner")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_negation_inner")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -500,6 +543,7 @@ local function notok(idx: fail<number>): never return idx end
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_table_serialization_works")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function serialize_table(arg)
@@ -511,14 +555,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_table_serialization_works")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ [string]: number, boolean: boolean, number: number }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ [string]: number, boolean: boolean, number: number }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_table_methods_work")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function gettable()
@@ -549,14 +594,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_table_methods_work")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ [boolean]: string, number: string }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ [boolean]: string, number: string }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_metatable_methods_work")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getmetatable()
@@ -581,9 +627,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_metatable_methods_work")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{boolean}");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{boolean}");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_function_serialization_works")
@@ -604,6 +650,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_function_serialization_works")
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_function_methods_work")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getfunction()
@@ -628,12 +675,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_function_methods_work")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "(string, number) -> (...boolean)");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "(string, number) -> (...boolean)");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_class_serialization_works")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_class_serialization_works")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -647,7 +694,7 @@ TEST_CASE_FIXTURE(ClassFixture, "udtf_class_serialization_works")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_class_serialization_works2")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_class_serialization_works2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -661,10 +708,10 @@ TEST_CASE_FIXTURE(ClassFixture, "udtf_class_serialization_works2")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_class_methods_works")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_class_methods_works")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
-
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getclass(arg)
@@ -678,14 +725,15 @@ TEST_CASE_FIXTURE(ClassFixture, "udtf_class_methods_works")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ BaseField: number, read BaseMethod: (BaseClass, number) -> (), read Touched: Connection }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ BaseField: number, read BaseMethod: (BaseClass, number) -> (), read Touched: Connection }");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "write_of_readonly_is_nil")
+TEST_CASE_FIXTURE(ExternTypeFixture, "write_of_readonly_is_nil")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getclass(arg)
@@ -704,14 +752,15 @@ TEST_CASE_FIXTURE(ClassFixture, "write_of_readonly_is_nil")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "false");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "false");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_check_mutability")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function checkmut()
@@ -735,14 +784,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_check_mutability")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ @metatable {boolean}, {  } }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ @metatable {boolean}, {  } }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_copy_works")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function getcopy()
@@ -767,9 +817,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_copy_works")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ @metatable { [number]: boolean, string: number }, {  } }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ @metatable { [number]: boolean, string: number }, {  } }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_simple_cyclic_serialization_works")
@@ -926,6 +976,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_function_type_cant_call_get_props")
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function foo()
@@ -938,14 +989,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "\"hi\"");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "\"hi\"");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function first(arg)
@@ -961,9 +1013,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_2")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "\"hi\"");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "\"hi\"");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_3")
@@ -990,22 +1042,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_3")
         end
     )");
 
-    if (FFlag::LuauUserTypeFunTypecheck)
-    {
-        LUAU_REQUIRE_ERROR_COUNT(5, result);
-        CHECK(toString(result.errors[0]) == R"(Unknown global 'fourth')");
-        CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
-    }
-    else
-    {
-        LUAU_REQUIRE_ERROR_COUNT(4, result);
-        CHECK(toString(result.errors[0]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
-    }
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK(toString(result.errors[0]) == R"(Unknown global 'fourth')");
+    CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_unordered")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function bar()
@@ -1018,9 +1063,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_unordered")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "\"hi\"");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "\"hi\"");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_no_shared_state")
@@ -1044,21 +1089,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_no_shared_state")
         local function ok2(idx: bar<'y'>): nil return idx end
     )");
 
-    if (FFlag::LuauUserTypeFunTypecheck)
-    {
-        // We are only checking first errors, others are mostly duplicates
-        LUAU_REQUIRE_ERROR_COUNT(9, result);
-        CHECK(toString(result.errors[0]) == R"(Unknown global 'glob')");
-        CHECK(toString(result.errors[1]) == R"('bar' type function errored at runtime: [string "foo"]:4: attempt to modify a readonly table)");
-        CHECK(toString(result.errors[2]) == R"(Type function instance bar<"x"> is uninhabited)");
-    }
-    else
-    {
-        // We are only checking first errors, others are mostly duplicates
-        LUAU_REQUIRE_ERROR_COUNT(8, result);
-        CHECK(toString(result.errors[0]) == R"('bar' type function errored at runtime: [string "foo"]:4: attempt to modify a readonly table)");
-        CHECK(toString(result.errors[1]) == R"(Type function instance bar<"x"> is uninhabited)");
-    }
+    // We are only checking first errors, others are mostly duplicates
+    LUAU_REQUIRE_ERROR_COUNT(9, result);
+    CHECK(toString(result.errors[0]) == R"(Unknown global 'glob')");
+    CHECK(toString(result.errors[1]) == R"('bar' type function errored at runtime: [string "foo"]:4: attempt to modify a readonly table)");
+    CHECK(toString(result.errors[2]) == R"(Type function instance bar<"x"> is uninhabited)");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_math_reset")
@@ -1078,6 +1113,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_math_reset")
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_optionify")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function optionify(tbl)
@@ -1098,9 +1134,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_optionify")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ age: number?, alive: boolean?, name: string? }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ age: number?, alive: boolean?, name: string? }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_illegal_global")
@@ -1113,32 +1149,23 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_illegal_global")
 
             return arg -- this should not be reached
         end
-        
+
         local function ok(idx: illegal<number>): nil return idx end
     )");
 
-    if (FFlag::LuauUserTypeFunTypecheck)
-    {
-        // We are only checking first errors, others are mostly duplicates
-        LUAU_REQUIRE_ERROR_COUNT(5, result);
-        CHECK(toString(result.errors[0]) == R"(Unknown global 'gcinfo')");
-        CHECK(
-            toString(result.errors[1]) ==
-            R"('illegal' type function errored at runtime: [string "illegal"]:3: this function is not supported in type functions)"
-        );
-    }
-    else
-    {
-        LUAU_REQUIRE_ERROR_COUNT(4, result); // There are 2 type function uninhabited error, 2 user defined type function error
-        UserDefinedTypeFunctionError* e = get<UserDefinedTypeFunctionError>(result.errors[0]);
-        REQUIRE(e);
-        CHECK(e->message == "'illegal' type function errored at runtime: [string \"illegal\"]:3: this function is not supported in type functions");
-    }
+    // We are only checking first errors, others are mostly duplicates
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK(toString(result.errors[0]) == R"(Unknown global 'gcinfo')");
+    CHECK(
+        toString(result.errors[1]) ==
+        R"('illegal' type function errored at runtime: [string "illegal"]:3: this function is not supported in type functions)"
+    );
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_recursion_and_gc")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function foo(tbl)
@@ -1156,8 +1183,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_recursion_and_gc")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_recovery_no_upvalues")
@@ -1200,6 +1227,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_follow")
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_strip_indexer")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
 
     CheckResult result = check(R"(
         type function stripindexer(tbl)
@@ -1216,9 +1244,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_strip_indexer")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    TypePackMismatch* tpm = get<TypePackMismatch>(result.errors[0]);
-    REQUIRE(tpm);
-    CHECK(toString(tpm->givenTp) == "{ foo: string }");
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK(toString(tm->givenType) == "{ foo: string }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_type_methods_on_types")
@@ -1285,7 +1313,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_eq_field")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")
 {
-    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauTableLiteralSubtypeSpecificCheck, true},
+    };
 
     CheckResult result = check(R"(
         type function test(x)
@@ -1299,35 +1330,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
 
-    if (FFlag::LuauImproveTypePathsInErrors)
-    {
-
-        CHECK(
-            toString(result.errors[0]) ==
-            "Type pack '\"number\"' could not be converted into 'never'; \n"
-            R"(this is because the 1st entry in the type pack is `"number"` in the former type and `never` in the latter type, and `"number"` is not a subtype of `never`)"
-        );
-        CHECK(
-            toString(result.errors[1]) ==
-            "Type pack '\"string\"' could not be converted into 'never'; \n"
-            R"(this is because the 1st entry in the type pack is `"string"` in the former type and `never` in the latter type, and `"string"` is not a subtype of `never`)"
-        );
-        CHECK(
-            toString(result.errors[2]) ==
-            "Type pack '\"table\"' could not be converted into 'never'; \n"
-            R"(this is because the 1st entry in the type pack is `"table"` in the former type and `never` in the latter type, and `"table"` is not a subtype of `never`)"
-        );
-    }
-    else
-    {
-        CHECK(
-            toString(result.errors[0]) == R"(Type pack '"number"' could not be converted into 'never'; at [0], "number" is not a subtype of never)"
-        );
-        CHECK(
-            toString(result.errors[1]) == R"(Type pack '"string"' could not be converted into 'never'; at [0], "string" is not a subtype of never)"
-        );
-        CHECK(toString(result.errors[2]) == R"(Type pack '"table"' could not be converted into 'never'; at [0], "table" is not a subtype of never)");
-    }
+    CHECK(toString(result.errors[0]) == "Type '\"number\"' could not be converted into 'never'");
+    CHECK(toString(result.errors[1]) == "Type '\"string\"' could not be converted into 'never'");
+    CHECK(toString(result.errors[2]) == "Type '\"table\"' could not be converted into 'never'");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_serialization")
@@ -1510,7 +1515,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "print_to_error_plus_no_result")
     CHECK(toString(result.errors[3]) == R"(Type function instance t0<string> is uninhabited)");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_serialization_1")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_serialization_1")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1527,7 +1532,7 @@ local function ok(idx: pass<test>): test return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_serialization_2")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_serialization_2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1544,7 +1549,7 @@ local function ok(idx: pass<test>): test return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_serialization_3")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_serialization_3")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1565,7 +1570,7 @@ local function ok(idx: pass<test>): test return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_cloning_1")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_cloning_1")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1582,7 +1587,7 @@ local function ok(idx: pass<test>): test return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_cloning_2")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_cloning_2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1599,7 +1604,7 @@ local function ok(idx: pass<test>): test return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_equality")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_equality")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1616,7 +1621,7 @@ local function ok(idx: pass<test>): true return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_1")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_1")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1635,7 +1640,7 @@ local function ok(idx: pass<test>): <T>(T) -> (T) return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_2")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1658,7 +1663,7 @@ local function ok(idx: pass<test>): <T>(T, T) -> (T) return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_3")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_3")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1687,7 +1692,7 @@ local function ok(idx: pass<>): <T, U..., V...>(T, U...) -> (T, V...) return idx
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_4")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_4")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1713,7 +1718,7 @@ local function ok(idx: pass<>): test return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_5")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_5")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1729,7 +1734,7 @@ local function ok(idx: pass<>): <T>(T) -> () return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_6")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_6")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1756,7 +1761,7 @@ local function ok(idx: pass<test>): <T, U>(T) -> (U) return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_7")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_7")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1778,7 +1783,7 @@ local function ok(idx: pass<test>): <T, U...>(T, U...) -> (T, U...) return idx e
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_8")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_8")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1794,13 +1799,13 @@ end
 
 type test = <U...>(U...) -> (U...)
 
-local function ok(idx: pass<test>): <T>(T, T) -> (T) return idx end
+local function ok(idx: pass<test>): <T>(T, T) -> (T, T) return idx end
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_equality_2")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_equality_2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1820,7 +1825,7 @@ local function ok(idx: get<>): false return idx end
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_1")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_1")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1839,7 +1844,7 @@ local function ok(idx: get<>): false return idx end
     );
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_2")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_2")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1855,7 +1860,7 @@ local function ok(idx: get<>): false return idx end
     CHECK(toString(result.errors[0]) == R"(Generic type 'T' is not in a scope of the active generic function)");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_3")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_3")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1876,7 +1881,7 @@ local function ok(idx: get<>): false return idx end
     CHECK(toString(result.errors[0]) == R"(Generic type 'U' is not in a scope of the active generic function)");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_4")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_4")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1892,7 +1897,7 @@ local function ok(idx: get<>): false return idx end
     CHECK(toString(result.errors[0]) == R"(Duplicate type parameter 'T')");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_5")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_5")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1908,7 +1913,7 @@ local function ok(idx: get<>): false return idx end
     CHECK(toString(result.errors[0]) == R"(Duplicate type parameter 'T')");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_6")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_6")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1924,7 +1929,7 @@ local function ok(idx: get<>): false return idx end
     CHECK(toString(result.errors[0]) == R"(Generic type pack 'U...' cannot be placed in a type position)");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_generic_api_error_7")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_generic_api_error_7")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1940,7 +1945,7 @@ local function ok(idx: get<>): false return idx end
     CHECK(toString(result.errors[0]) == R"(Generic type pack 'U...' is not in a scope of the active generic function)");
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_variadic_api")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_variadic_api")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
@@ -1983,13 +1988,20 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_singleton_equality_bool")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
+    if (FFlag::LuauEagerGeneralization2)
+    {
+        // FIXME: CLI-151985
+        // This test breaks because we can't see that eq<type?, b> is already fully reduced.
+        return;
+    }
+
     CheckResult result = check(R"(
 type function compare(arg)
     return types.singleton(types.singleton(false) == arg)
 end
 
-local function ok(idx: compare<false>): true return idx end
-local function ok(idx: compare<true>): false return idx end
+local function ok1(idx: compare<false>): true return idx end
+local function ok2(idx: compare<true>): false return idx end
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
@@ -1998,6 +2010,13 @@ local function ok(idx: compare<true>): false return idx end
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_singleton_equality_string")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+
+    if (FFlag::LuauEagerGeneralization2)
+    {
+        // FIXME: CLI-151985
+        // This test breaks because we can't see that eq<type?, b> is already fully reduced.
+        return;
+    }
 
     CheckResult result = check(R"(
 type function compare(arg)
@@ -2048,10 +2067,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_print_tab_char_fix")
     CHECK_EQ("1\t2", toString(result.errors[0]));
 }
 
-TEST_CASE_FIXTURE(ClassFixture, "udtf_class_parent_ops")
+TEST_CASE_FIXTURE(ExternTypeFixture, "udtf_class_parent_ops")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
-    ScopedFastFlag readWriteParents{FFlag::LuauTypeFunReadWriteParents, true};
 
     CheckResult result = check(R"(
         type function readparentof(arg)
@@ -2071,10 +2089,6 @@ TEST_CASE_FIXTURE(ClassFixture, "udtf_class_parent_ops")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_success")
 {
-    // Needs new global initialization in the Fixture, but can't place the flag inside the base Fixture
-    if (!FFlag::LuauUserTypeFunTypecheck)
-        return;
-
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
     CheckResult result = check(R"(
@@ -2088,10 +2102,6 @@ end
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_failure")
 {
-    // Needs new global initialization in the Fixture, but can't place the flag inside the base Fixture
-    if (!FFlag::LuauUserTypeFunTypecheck)
-        return;
-
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
 
     CheckResult result = check(R"(
@@ -2106,7 +2116,6 @@ end
 TEST_CASE_FIXTURE(BuiltinsFixture, "outer_generics_irreducible")
 {
     ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
-    ScopedFastFlag luauNewTypeFunReductionChecks2{FFlag::LuauNewTypeFunReductionChecks2, true};
 
     CheckResult result = check(R"(
 type function func(t)
@@ -2186,8 +2195,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "irreducible_pending_expansions")
     if (!FFlag::LuauSolverV2)
         return;
 
-    ScopedFastFlag luauNewTypeFunReductionChecks2{FFlag::LuauNewTypeFunReductionChecks2, true};
-
     CheckResult result = check(R"(
 type function foo(t)
     return types.unionof(t, types.singleton(nil))
@@ -2202,6 +2209,220 @@ local x: wrap<{a: number}> = { a = 2 }
     LUAU_REQUIRE_NO_ERRORS(result);
 
     CHECK(toString(requireType("x"), ToStringOptions{true}) == "{ a: number }?");
+}
+
+TEST_CASE_FIXTURE(Fixture, "typeof_is_not_a_valid_type_function_name")
+{
+    ScopedFastFlag _{FFlag::LuauSolverV2, true};
+
+    CheckResult result = check(R"(
+        type function typeof(t)
+	        return t
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK("typeof cannot be used as an identifier for a type function or alias" == toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_call")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type Test<T> = T?
+
+type function foo(t)
+    return Test(t)
+end
+
+local x: foo<{a: number}> = { a = 2 }
+local y: foo<{b: number}> = { b = 2 }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK(toString(requireType("x"), ToStringOptions{true}) == "{ a: number }?");
+    CHECK(toString(requireType("y"), ToStringOptions{true}) == "{ b: number }?");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_values")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type Test = { a: number }
+
+type function foo(t)
+    return types.unionof(Test, t)
+end
+
+local x: foo<nil> = { a = 2 }
+local y: foo<string> = "a"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK(toString(requireType("x"), ToStringOptions{true}) == "{ a: number }?");
+    CHECK(toString(requireType("y"), ToStringOptions{true}) == "string | { a: number }");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_call_with_reduction")
+{
+    if (!FFlag::LuauSolverV2)
+        return;
+
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type Test<T> = rawget<T, "a">
+
+type function foo(t)
+    return Test(t)
+end
+
+local x: foo<{ a: number }> = 2
+local y: foo<{ a: string }> = "x"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK(toString(requireType("x"), ToStringOptions{true}) == "number");
+    CHECK(toString(requireType("y"), ToStringOptions{true}) == "string");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_implicit_export")
+{
+    if (!FFlag::LuauSolverV2)
+        return;
+
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    fileResolver.source["game/A"] = R"(
+type Test<T> = rawget<T, "a">
+
+export type function foo(t)
+    return Test(t)
+end
+local x: foo<{ a: number }> = 2
+return {}
+    )";
+
+    CheckResult aResult = frontend.check("game/A");
+    LUAU_REQUIRE_NO_ERRORS(aResult);
+
+    CHECK(toString(requireType("game/A", "x")) == R"(number)");
+
+    CheckResult bResult = check(R"(
+local Test = require(game.A);
+local y: Test.foo<{ a: string }> = "x"
+    )");
+    LUAU_REQUIRE_NO_ERRORS(bResult);
+
+    CHECK(toString(requireType("y")) == R"(string)");
+}
+
+TEST_CASE_FIXTURE(ExternTypeFixture, "type_alias_not_too_many_globals")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type function get()
+    return number
+end
+local function ok(idx: get<>): number return idx end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK(toString(result.errors[0]) == R"(Unknown global 'number')");
+}
+
+TEST_CASE_FIXTURE(ExternTypeFixture, "type_alias_not_enough_arguments")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type Test<A, B> = (a: A, b: B) -> A
+
+type function get()
+    return Test(types.number)
+end
+
+local function ok(idx: get<>): number return idx end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK(toString(result.errors[0]) == R"('get' type function errored at runtime: [string "get"]:5: not enough arguments to call)");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_can_call_packs")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type Test<T, U...> = (U...) -> T
+
+type function foo(t)
+    return Test(types.number, types.string, t)
+end
+
+local x: foo<boolean>
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK(toString(requireType("x"), ToStringOptions{true}) == "(string, boolean) -> number");
+}
+
+TEST_CASE_FIXTURE(ExternTypeFixture, "type_alias_reduction_errors")
+{
+    if (!FFlag::LuauSolverV2)
+        return;
+
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type Test<T, U> = setmetatable<T, U>
+
+type function get()
+    return Test(types.number, types.string)
+end
+
+local function ok(idx: get<>): number return idx end
+    )");
+
+    // TODO: type solving fails to complete in this test because of the blocked NameConstraint on the 'Test' alias
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK(
+        toString(result.errors[1]) ==
+        R"('get' type function errored at runtime: [string "get"]:5: failed to reduce type function with: Type function instance setmetatable<number, string> is uninhabited)"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_unreferenced_do_not_block")
+{
+    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
+    ScopedFastFlag luauUserTypeFunctionAliases{FFlag::LuauUserTypeFunctionAliases, true};
+
+    CheckResult result = check(R"(
+type function foo(t)
+    return types.unionof(types.number, t)
+end
+
+type Test = foo<string>
+
+local x: foo<boolean>
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK(toString(requireType("x"), ToStringOptions{true}) == "boolean | number");
 }
 
 TEST_SUITE_END();

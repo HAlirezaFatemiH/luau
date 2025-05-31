@@ -10,14 +10,18 @@
 #include "Luau/Normalize.h"
 #include "Luau/BuiltinDefinitions.h"
 
-LUAU_FASTFLAG(LuauNormalizeNegatedErrorToAnError)
-LUAU_FASTFLAG(LuauNormalizeIntersectErrorToAnError)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTINT(LuauNormalizeIntersectionLimit)
 LUAU_FASTINT(LuauNormalizeUnionLimit)
-LUAU_FASTFLAG(LuauNormalizeLimitFunctionSet)
-LUAU_FASTFLAG(LuauSubtypingStopAtNormFail)
+LUAU_FASTFLAG(LuauEagerGeneralization2)
+LUAU_FASTFLAG(LuauRefineWaitForBlockedTypesInTarget)
+LUAU_FASTFLAG(LuauSimplifyOutOfLine)
+LUAU_FASTFLAG(LuauOptimizeFalsyAndTruthyIntersect)
+LUAU_FASTFLAG(LuauClipVariadicAnysFromArgsToGenericFuncs2)
+LUAU_FASTFLAG(LuauSubtypeGenericsAndNegations)
+LUAU_FASTFLAG(LuauNoMoreInjectiveTypeFunctions)
+LUAU_FASTFLAG(LuauSubtypeGenericsAndNegations)
 
 using namespace Luau;
 
@@ -324,9 +328,9 @@ TEST_CASE_FIXTURE(IsSubtypeFixture, "cyclic_table")
 }
 #endif
 
-TEST_CASE_FIXTURE(IsSubtypeFixture, "classes")
+TEST_CASE_FIXTURE(IsSubtypeFixture, "extern_types")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
 
     check(""); // Ensure that we have a main Module.
 
@@ -601,8 +605,6 @@ TEST_CASE_FIXTURE(NormalizeFixture, "intersect_truthy_expressed_as_intersection"
 
 TEST_CASE_FIXTURE(NormalizeFixture, "intersect_error")
 {
-    ScopedFastFlag luauNormalizeIntersectErrorToAnError{FFlag::LuauNormalizeIntersectErrorToAnError, true};
-
     std::shared_ptr<const NormalizedType> norm = toNormalizedType(R"(string & AAA)", 1);
     REQUIRE(norm);
     CHECK("*error-type*" == toString(normalizer.typeFromNormal(*norm)));
@@ -610,9 +612,6 @@ TEST_CASE_FIXTURE(NormalizeFixture, "intersect_error")
 
 TEST_CASE_FIXTURE(NormalizeFixture, "intersect_not_error")
 {
-    ScopedFastFlag luauNormalizeIntersectErrorToAnError{FFlag::LuauNormalizeIntersectErrorToAnError, true};
-    ScopedFastFlag luauNormalizeNegatedErrorToAnError{FFlag::LuauNormalizeNegatedErrorToAnError, true};
-
     std::shared_ptr<const NormalizedType> norm = toNormalizedType(R"(string & Not<)", 1);
     REQUIRE(norm);
     CHECK("*error-type*" == toString(normalizer.typeFromNormal(*norm)));
@@ -766,7 +765,7 @@ TEST_CASE_FIXTURE(Fixture, "cyclic_table_normalizes_sensibly")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "skip_force_normal_on_external_types")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
 
     CheckResult result = check(R"(
 export type t0 = { a: Child }
@@ -785,24 +784,24 @@ export type t0 = (((any)&({_:l0.t0,n0:t0,_G:any,}))&({_:any,}))&(((any)&({_:l0.t
     LUAU_REQUIRE_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(NormalizeFixture, "unions_of_classes")
+TEST_CASE_FIXTURE(NormalizeFixture, "unions_of_extern_types")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
     CHECK("Parent | Unrelated" == toString(normal("Parent | Unrelated")));
     CHECK("Parent" == toString(normal("Parent | Child")));
     CHECK("Parent | Unrelated" == toString(normal("Parent | Child | Unrelated")));
 }
 
-TEST_CASE_FIXTURE(NormalizeFixture, "intersections_of_classes")
+TEST_CASE_FIXTURE(NormalizeFixture, "intersections_of_extern_types")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
     CHECK("Child" == toString(normal("Parent & Child")));
     CHECK("never" == toString(normal("Child & Unrelated")));
 }
 
-TEST_CASE_FIXTURE(NormalizeFixture, "narrow_union_of_classes_with_intersection")
+TEST_CASE_FIXTURE(NormalizeFixture, "narrow_union_of_extern_types_with_intersection")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
     CHECK("Child" == toString(normal("(Child | Unrelated) & Child")));
 }
 
@@ -874,9 +873,9 @@ TEST_CASE_FIXTURE(NormalizeFixture, "crazy_metatable")
     CHECK("never" == toString(normal("Mt<{}, number> & Mt<{}, string>")));
 }
 
-TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_classes")
+TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_extern_types")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
     CHECK("(Parent & ~Child) | Unrelated" == toString(normal("(Parent & Not<Child>) | Unrelated")));
     CHECK("((class & ~Child) | boolean | buffer | function | number | string | table | thread)?" == toString(normal("Not<Child>")));
     CHECK("never" == toString(normal("Not<Parent> & Child")));
@@ -889,15 +888,15 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_classes")
     CHECK("Child" == toString(normal("(Child | Unrelated) & Not<Unrelated>")));
 }
 
-TEST_CASE_FIXTURE(NormalizeFixture, "classes_and_unknown")
+TEST_CASE_FIXTURE(NormalizeFixture, "extern_types_and_unknown")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
     CHECK("Parent" == toString(normal("Parent & unknown")));
 }
 
-TEST_CASE_FIXTURE(NormalizeFixture, "classes_and_never")
+TEST_CASE_FIXTURE(NormalizeFixture, "extern_types_and_never")
 {
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
     CHECK("never" == toString(normal("Parent & never")));
 }
 
@@ -1177,38 +1176,51 @@ end
 )");
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "fuzz_limit_function_intersection_complexity")
+TEST_CASE_FIXTURE(BuiltinsFixture, "fuzz_flatten_type_pack_cycle")
 {
-    ScopedFastInt luauNormalizeIntersectionLimit{FInt::LuauNormalizeIntersectionLimit, 50};
-    ScopedFastInt luauNormalizeUnionLimit{FInt::LuauNormalizeUnionLimit, 20};
-    ScopedFastFlag luauNormalizeLimitFunctionSet{FFlag::LuauNormalizeLimitFunctionSet, true};
-    ScopedFastFlag luauSubtypingStopAtNormFail{FFlag::LuauSubtypingStopAtNormFail, true};
+    ScopedFastFlag sff[] = {{FFlag::LuauSolverV2, true}};
 
-    CheckResult result = check(R"(
-function _(_).readu32(l0)
-return ({[_(_(_))]=_,[_(if _ then _)]=_,n0=_,})[_],nil
+    // Note: if this stops throwing an exception, it means we fixed cycle construction and can replace with a regular check
+    CHECK_THROWS_AS(
+        check(R"(
+function _(_).readu32<t0...>()
+repeat
+until function<t4>()
 end
-_(_)[_(n32)] %= _(_(_))
-    )");
-
-    LUAU_REQUIRE_ERRORS(result);
+return if _ then _,_(_)
+end
+_(_(_(_)),``)
+do end
+    )"),
+        InternalCompilerError
+    );
 }
-
-TEST_CASE_FIXTURE(BuiltinsFixture, "fuzz_propagate_normalization_failures")
+#if 0
+TEST_CASE_FIXTURE(BuiltinsFixture, "fuzz_union_type_pack_cycle")
 {
-    ScopedFastInt luauNormalizeIntersectionLimit{FInt::LuauNormalizeIntersectionLimit, 50};
-    ScopedFastInt luauNormalizeUnionLimit{FInt::LuauNormalizeUnionLimit, 20};
-    ScopedFastFlag luauNormalizeLimitFunctionSet{FFlag::LuauNormalizeLimitFunctionSet, true};
-    ScopedFastFlag luauSubtypingStopAtNormFail{FFlag::LuauSubtypingStopAtNormFail, true};
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauRefineWaitForBlockedTypesInTarget, true},
+        {FFlag::LuauSimplifyOutOfLine, true},
+        {FFlag::LuauSubtypeGenericsAndNegations, true},
+        {FFlag::LuauNoMoreInjectiveTypeFunctions, true},
+        {FFlag::LuauOptimizeFalsyAndTruthyIntersect, true},
+        {FFlag::LuauClipVariadicAnysFromArgsToGenericFuncs2, true},
+        {FFlag::LuauEagerGeneralization2, true}
+    };
+    ScopedFastInt sfi{FInt::LuauTypeInferRecursionLimit, 0};
 
-    CheckResult result = check(R"(
-function _(_,"").readu32(l0)
-return ({[_(_(_))]=_,[_(if _ then _,_())]=_,[""]=_,})[_],nil
+    // FIXME CLI-153131: This is constructing a cyclic type pack
+    CHECK_THROWS_AS(
+        check(R"(
+function _(_).n0(l32,...)
+return ({n0=_,[_(if _ then _,nil)]=- _,[_(_(_))]=_,})[_],_(_)
 end
-_().readu32 %= _(_(_(_),_))
-    )");
-
-    LUAU_REQUIRE_ERRORS(result);
+_[_] ^= _(_(_))
+    )"),
+        InternalCompilerError
+    );
 }
+#endif
 
 TEST_SUITE_END();

@@ -19,7 +19,7 @@ LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTINT(LuauTypeInferTypePackLoopLimit)
-LUAU_FASTFLAG(LuauImproveTypePathsInErrors)
+LUAU_FASTFLAG(LuauDfgAllowUpdatesInLoops)
 
 TEST_SUITE_BEGIN("ProvisionalTests");
 
@@ -58,7 +58,7 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
             end
         end
     )"
-                                                         : R"(
+                                                          : R"(
         function f(a:{fn:()->(a,b...)}): ()
             if type(a) == 'boolean'then
                 local a1:boolean=a
@@ -77,7 +77,7 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
             end
         end
     )"
-                                                                      : R"(
+                                                                       : R"(
         function f(a:{fn:()->(unknown,...unknown)}): ()
             if type(a) == 'boolean'then
                 local a1:{fn:()->(unknown,...unknown)}&boolean=a
@@ -96,7 +96,7 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
             end
         end
     )"
-                                                                  : R"(
+                                                                   : R"(
         function f(a:{fn:()->(unknown,...unknown)}): ()
             if type(a) == 'boolean'then
                 local a1:{fn:()->(unknown,...unknown)}&boolean=a
@@ -874,18 +874,11 @@ TEST_CASE_FIXTURE(Fixture, "assign_table_with_refined_property_with_a_similar_ty
     else
     {
         LUAU_REQUIRE_ERROR_COUNT(1, result);
-        const std::string expected = (FFlag::LuauImproveTypePathsInErrors) ?
-                                                                           R"(Type
+        const std::string expected =
+            R"(Type
 	'{| x: number? |}'
 could not be converted into
 	'{| x: number |}'
-caused by:
-  Property 'x' is not compatible.
-Type 'number?' could not be converted into 'number' in an invariant context)"
-                                                                           : R"(Type
-    '{| x: number? |}'
-could not be converted into
-    '{| x: number |}'
 caused by:
   Property 'x' is not compatible.
 Type 'number?' could not be converted into 'number' in an invariant context)";
@@ -1039,7 +1032,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_class_instances_are_invariant_old_solver")
 {
     DOES_NOT_PASS_NEW_SOLVER_GUARD();
 
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
 
     CheckResult result = check(R"(
         function foo(ref: {current: Parent?})
@@ -1057,7 +1050,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_class_instances_are_invariant_new_solver")
 {
     ScopedFastFlag sff{FFlag::LuauSolverV2, true};
 
-    createSomeClasses(&frontend);
+    createSomeExternTypes(&frontend);
 
     CheckResult result = check(R"(
         function foo(ref: {read current: Parent?})
@@ -1364,6 +1357,23 @@ TEST_CASE_FIXTURE(Fixture, "we_cannot_infer_functions_that_return_inconsistently
         CHECK("<T, b>({T}, b) -> number" == toString(requireType("find_first")));
     }
 #endif
+}
+
+TEST_CASE_FIXTURE(Fixture, "loop_unsoundness")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauDfgAllowUpdatesInLoops, true},
+    };
+    // This is a tactical unsoundness we're introducing to resolve issues around
+    // cyclic types. You can see that if this loop were to run more than once,
+    // we'd error as we'd try to call a number.
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        local f = function () return 42 end
+        while true do
+            f = f()
+        end
+    )"));
 }
 
 TEST_SUITE_END();
