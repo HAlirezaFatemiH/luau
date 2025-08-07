@@ -19,10 +19,19 @@
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauEnableWriteOnlyProperties)
-LUAU_FASTFLAG(LuauEagerGeneralization2)
+LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauStuckTypeFunctionsStillDispatch)
+LUAU_FASTFLAG(LuauRemoveTypeCallsForReadWriteProps)
+LUAU_FASTFLAG(LuauRefineTablesWithReadType)
 
 namespace Luau
 {
+
+static bool isOptionalOrFree(TypeId ty)
+{
+    ty = follow(ty);
+    return isOptional(ty) || (get<FreeType>(ty) != nullptr);
+}
 
 static bool areCompatible(TypeId left, TypeId right)
 {
@@ -43,14 +52,32 @@ static bool areCompatible(TypeId left, TypeId right)
         // the right table is free (and therefore potentially has an indexer or
         // a compatible property)
 
-        LUAU_ASSERT(leftProp.isReadOnly() || leftProp.isShared());
+        if (FFlag::LuauRemoveTypeCallsForReadWriteProps || FFlag::LuauRefineTablesWithReadType)
+        {
+            if (rightTable->state == TableState::Free || rightTable->indexer.has_value())
+                return true;
 
-        const TypeId leftType = follow(leftProp.isReadOnly() ? *leftProp.readTy : leftProp.type());
+            if (leftProp.isReadOnly() || leftProp.isShared())
+            {
+                if (isOptionalOrFree(*leftProp.readTy))
+                    return true;
+            }
 
-        if (isOptional(leftType) || get<FreeType>(leftType) || rightTable->state == TableState::Free || rightTable->indexer.has_value())
-            return true;
+            // FIXME: Could this create an issue for write only / divergent properties?
+            return false;
+        }
+        else
+        {
+            LUAU_ASSERT(leftProp.isReadOnly() || leftProp.isShared());
 
-        return false;
+            const TypeId leftType = follow(leftProp.isReadOnly() ? *leftProp.readTy : leftProp.type_DEPRECATED());
+
+            if (isOptional(leftType) || get<FreeType>(leftType) || rightTable->state == TableState::Free || rightTable->indexer.has_value())
+                return true;
+
+            return false;
+        }
+
     };
 
     for (const auto& [name, leftProp] : leftTable->props)
@@ -79,6 +106,12 @@ static bool areCompatible(TypeId left, TypeId right)
 // returns `true` if `ty` is irressolvable and should be added to `incompleteSubtypes`.
 static bool isIrresolvable(TypeId ty)
 {
+    if (FFlag::LuauStuckTypeFunctionsStillDispatch)
+    {
+        if (auto tfit = get<TypeFunctionInstanceType>(ty); tfit && tfit->state != TypeFunctionInstanceState::Unsolved)
+            return false;
+    }
+
     return get<BlockedType>(ty) || get<TypeFunctionInstanceType>(ty);
 }
 
@@ -329,12 +362,12 @@ bool Unifier2::unify(TypeId subTy, const FunctionType* superFn)
 
         for (TypePackId genericPack : subFn->genericPacks)
         {
-            if (FFlag::LuauEagerGeneralization2)
+            if (FFlag::LuauEagerGeneralization4)
             {
-                if (FFlag::LuauEagerGeneralization2)
+                if (FFlag::LuauEagerGeneralization4)
                     genericPack = follow(genericPack);
 
-                // TODO: Clip this follow() with LuauEagerGeneralization2
+                // TODO: Clip this follow() with LuauEagerGeneralization4
                 const GenericTypePack* gen = get<GenericTypePack>(follow(genericPack));
                 if (gen)
                     genericPackSubstitutions[genericPack] = freshTypePack(scope, gen->polarity);
@@ -426,13 +459,13 @@ bool Unifier2::unify(TableType* subTable, const TableType* superTable)
                 if (subProp.isReadOnly() && superProp.isReadOnly())
                     result &= unify(*subProp.readTy, *superPropOpt->second.readTy);
                 else if (subProp.isReadOnly())
-                    result &= unify(*subProp.readTy, superProp.type());
+                    result &= unify(*subProp.readTy, superProp.type_DEPRECATED());
                 else if (superProp.isReadOnly())
-                    result &= unify(subProp.type(), *superProp.readTy);
+                    result &= unify(subProp.type_DEPRECATED(), *superProp.readTy);
                 else
                 {
-                    result &= unify(subProp.type(), superProp.type());
-                    result &= unify(superProp.type(), subProp.type());
+                    result &= unify(subProp.type_DEPRECATED(), superProp.type_DEPRECATED());
+                    result &= unify(superProp.type_DEPRECATED(), subProp.type_DEPRECATED());
                 }
             }
         }
@@ -465,7 +498,7 @@ bool Unifier2::unify(TableType* subTable, const TableType* superTable)
     {
         result &= unify(subTable->indexer->indexType, superTable->indexer->indexType);
         result &= unify(subTable->indexer->indexResultType, superTable->indexer->indexResultType);
-        if (FFlag::LuauEagerGeneralization2)
+        if (FFlag::LuauEagerGeneralization4)
         {
             // FIXME: We can probably do something more efficient here.
             result &= unify(superTable->indexer->indexType, subTable->indexer->indexType);
@@ -689,7 +722,7 @@ TypeId Unifier2::mkIntersection(TypeId left, TypeId right)
 
 OccursCheckResult Unifier2::occursCheck(DenseHashSet<TypeId>& seen, TypeId needle, TypeId haystack)
 {
-    RecursionLimiter _ra(&recursionCount, recursionLimit);
+    RecursionLimiter _ra("Unifier2::occursCheck", &recursionCount, recursionLimit);
 
     OccursCheckResult occurrence = OccursCheckResult::Pass;
 
@@ -751,7 +784,7 @@ OccursCheckResult Unifier2::occursCheck(DenseHashSet<TypePackId>& seen, TypePack
     if (!getMutable<FreeTypePack>(needle))
         ice->ice("Expected needle pack to be free");
 
-    RecursionLimiter _ra(&recursionCount, recursionLimit);
+    RecursionLimiter _ra("Unifier2::occursCheck", &recursionCount, recursionLimit);
 
     while (!getMutable<ErrorTypePack>(haystack))
     {

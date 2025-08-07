@@ -6,6 +6,7 @@
 #include "Luau/NotNull.h"
 #include "Luau/Variant.h"
 #include "Luau/TypeFwd.h"
+#include "Luau/TypeIds.h"
 
 #include <string>
 #include <memory>
@@ -282,6 +283,25 @@ struct SimplifyConstraint
     TypeId ty;
 };
 
+// push_function_type_constraint expectedFunctionType => functionType
+//
+// Attempt to "push" the types of `expectedFunctionType` into `functionType`,
+// assuming that `expr` is a lambda who's ungeneralized type is `functionType`.
+// Similar to `FunctionCheckConstraint`. For example:
+//
+//  local Foo = {} :: { bar : (number) -> () }
+//
+//  function Foo.bar(x) end
+//
+// This will force `x` to be inferred as `number`.
+struct PushFunctionTypeConstraint
+{
+    TypeId expectedFunctionType;
+    TypeId functionType;
+    NotNull<AstExprFunction> expr;
+    bool isSelf;
+};
+
 using ConstraintV = Variant<
     SubtypeConstraint,
     PackSubtypeConstraint,
@@ -301,7 +321,8 @@ using ConstraintV = Variant<
     ReducePackConstraint,
     EqualityConstraint,
     TableCheckConstraint,
-    SimplifyConstraint>;
+    SimplifyConstraint,
+    PushFunctionTypeConstraint>;
 
 struct Constraint
 {
@@ -316,7 +337,10 @@ struct Constraint
 
     std::vector<NotNull<Constraint>> dependencies;
 
-    DenseHashSet<TypeId> getMaybeMutatedFreeTypes() const;
+    // Clip with LuauUseOrderedTypeSetsInConstraints
+    DenseHashSet<TypeId> getMaybeMutatedFreeTypes_DEPRECATED() const;
+
+    TypeIds getMaybeMutatedFreeTypes() const;
 };
 
 using ConstraintPtr = std::unique_ptr<Constraint>;

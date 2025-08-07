@@ -11,6 +11,7 @@
 
 LUAU_FASTINT(LuauVisitRecursionLimit)
 LUAU_FASTFLAG(LuauSolverV2)
+LUAU_FASTFLAG(LuauSolverAgnosticVisitType)
 
 namespace Luau
 {
@@ -72,6 +73,8 @@ struct GenericTypeVisitor
 {
     using Set = S;
 
+    const std::string visitorName;
+
     Set seen;
     bool skipBoundTypes = false;
     int recursionCounter = 0;
@@ -79,8 +82,9 @@ struct GenericTypeVisitor
 
     GenericTypeVisitor() = default;
 
-    explicit GenericTypeVisitor(Set seen, bool skipBoundTypes = false)
-        : seen(std::move(seen))
+    explicit GenericTypeVisitor(const std::string visitorName, Set seen, bool skipBoundTypes = false)
+        : visitorName(visitorName)
+        , seen(std::move(seen))
         , skipBoundTypes(skipBoundTypes)
     {
     }
@@ -214,7 +218,7 @@ struct GenericTypeVisitor
 
     void traverse(TypeId ty)
     {
-        RecursionLimiter limiter{&recursionCounter, FInt::LuauVisitRecursionLimit};
+        RecursionLimiter limiter{visitorName, &recursionCounter, FInt::LuauVisitRecursionLimit};
 
         if (visit_detail::hasSeen(seen, ty))
         {
@@ -231,7 +235,20 @@ struct GenericTypeVisitor
         }
         else if (auto ftv = get<FreeType>(ty))
         {
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverAgnosticVisitType)
+            {
+                if (visit(ty, *ftv))
+                {
+                    // Regardless of the choice of solver, all free types are guaranteed to have
+                    // lower and upper bounds
+                    LUAU_ASSERT(ftv->lowerBound);
+                    LUAU_ASSERT(ftv->upperBound);
+
+                    traverse(ftv->lowerBound);
+                    traverse(ftv->upperBound);
+                }
+            }
+            else if (FFlag::LuauSolverV2)
             {
                 if (visit(ty, *ftv))
                 {
@@ -281,7 +298,7 @@ struct GenericTypeVisitor
                 {
                     for (auto& [_name, prop] : ttv->props)
                     {
-                        if (FFlag::LuauSolverV2)
+                        if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticVisitType)
                         {
                             if (auto ty = prop.readTy)
                                 traverse(*ty);
@@ -294,7 +311,7 @@ struct GenericTypeVisitor
                                 traverse(*ty);
                         }
                         else
-                            traverse(prop.type());
+                            traverse(prop.type_DEPRECATED());
                     }
 
                     if (ttv->indexer)
@@ -319,7 +336,7 @@ struct GenericTypeVisitor
             {
                 for (const auto& [name, prop] : etv->props)
                 {
-                    if (FFlag::LuauSolverV2)
+                    if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticVisitType)
                     {
                         if (auto ty = prop.readTy)
                             traverse(*ty);
@@ -332,7 +349,7 @@ struct GenericTypeVisitor
                             traverse(*ty);
                     }
                     else
-                        traverse(prop.type());
+                        traverse(prop.type_DEPRECATED());
                 }
 
                 if (etv->parent)
@@ -513,8 +530,8 @@ struct GenericTypeVisitor
  */
 struct TypeVisitor : GenericTypeVisitor<std::unordered_set<void*>>
 {
-    explicit TypeVisitor(bool skipBoundTypes = false)
-        : GenericTypeVisitor{{}, skipBoundTypes}
+    explicit TypeVisitor(const std::string visitorName, bool skipBoundTypes = false)
+        : GenericTypeVisitor{visitorName, {}, skipBoundTypes}
     {
     }
 };
@@ -522,8 +539,8 @@ struct TypeVisitor : GenericTypeVisitor<std::unordered_set<void*>>
 /// Visit each type under a given type.  Each type will only be checked once even if there are multiple paths to it.
 struct TypeOnceVisitor : GenericTypeVisitor<DenseHashSet<void*>>
 {
-    explicit TypeOnceVisitor(bool skipBoundTypes = false)
-        : GenericTypeVisitor{DenseHashSet<void*>{nullptr}, skipBoundTypes}
+    explicit TypeOnceVisitor(const std::string visitorName, bool skipBoundTypes = false)
+        : GenericTypeVisitor{visitorName, DenseHashSet<void*>{nullptr}, skipBoundTypes}
     {
     }
 };

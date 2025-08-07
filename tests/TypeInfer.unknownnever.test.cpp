@@ -7,7 +7,9 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2);
-LUAU_FASTFLAG(LuauNoMoreInjectiveTypeFunctions);
+LUAU_FASTFLAG(LuauEagerGeneralization4);
+LUAU_FASTFLAG(LuauStuckTypeFunctionsStillDispatch);
+LUAU_FASTFLAG(LuauForceSimplifyConstraint2)
 
 TEST_SUITE_BEGIN("TypeInferUnknownNever");
 
@@ -328,27 +330,39 @@ TEST_CASE_FIXTURE(Fixture, "length_of_never")
 
 TEST_CASE_FIXTURE(Fixture, "dont_unify_operands_if_one_of_the_operand_is_never_in_any_ordering_operators")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauEagerGeneralization4, true},
+        {FFlag::LuauStuckTypeFunctionsStillDispatch, true},
+        {FFlag::LuauForceSimplifyConstraint2, true},
+    };
+
     CheckResult result = check(R"(
         local function ord(x: nil, y)
             return x ~= nil and x > y
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauSolverV2 && FFlag::LuauNoMoreInjectiveTypeFunctions)
+    if (FFlag::LuauSolverV2)
     {
-        // FIXME: CLI-152325
-        CHECK_EQ("(nil, nil & ~nil) -> boolean", toString(requireType("ord")));
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK(get<ExplicitFunctionAnnotationRecommended>(result.errors[0]));
+        CHECK_EQ("<a>(nil, a) -> false | le<a, nil & ~nil>", toString(requireType("ord")));
     }
-    else if (FFlag::LuauSolverV2)
-        CHECK_EQ("(nil, unknown) -> boolean", toString(requireType("ord")));
     else
+    {
+        LUAU_REQUIRE_NO_ERRORS(result);
         CHECK_EQ("<a>(nil, a) -> boolean", toString(requireType("ord")));
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "math_operators_and_never")
 {
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauEagerGeneralization4, true},
+        {FFlag::LuauStuckTypeFunctionsStillDispatch, true},
+    };
+
     CheckResult result = check(R"(
         local function mul(x: nil, y)
             return x ~= nil and x * y -- infers boolean | never, which is normalized into boolean
@@ -362,7 +376,7 @@ TEST_CASE_FIXTURE(Fixture, "math_operators_and_never")
 
         // CLI-114134 Egraph-based simplification.
         // CLI-116549 x ~= nil : false when x : nil
-        CHECK("<a>(nil, a) -> and<boolean, mul<nil & ~nil, a>>" == toString(requireType("mul")));
+        CHECK("<a>(nil, a) -> false | mul<nil & ~nil, a>" == toString(requireType("mul")));
     }
     else
     {

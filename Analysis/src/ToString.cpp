@@ -16,13 +16,13 @@
 #include "Luau/TypeOrPack.h"
 
 #include <algorithm>
-#include <stdexcept>
 #include <string>
 
 LUAU_FASTFLAGVARIABLE(LuauEnableDenseTableAlias)
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAGVARIABLE(LuauStringPartLengthLimit)
+LUAU_FASTFLAG(LuauRemoveTypeCallsForReadWriteProps)
+LUAU_FASTFLAGVARIABLE(LuauSolverAgnosticStringification)
 
 /*
  * Enables increasing levels of verbosity for Luau type names when stringifying.
@@ -52,7 +52,11 @@ namespace
 
 struct FindCyclicTypes final : TypeVisitor
 {
-    FindCyclicTypes() = default;
+    FindCyclicTypes()
+        : TypeVisitor("FindCyclicTypes")
+    {
+    }
+
     FindCyclicTypes(const FindCyclicTypes&) = delete;
     FindCyclicTypes& operator=(const FindCyclicTypes&) = delete;
 
@@ -86,8 +90,14 @@ struct FindCyclicTypes final : TypeVisitor
     {
         if (!visited.insert(ty))
             return false;
-
-        if (FFlag::LuauSolverV2)
+        if (FFlag::LuauSolverAgnosticStringification)
+        {
+            LUAU_ASSERT(ft.lowerBound);
+            LUAU_ASSERT(ft.upperBound);
+            traverse(ft.lowerBound);
+            traverse(ft.upperBound);
+        }
+        else if (FFlag::LuauSolverV2)
         {
             // TODO: Replace these if statements with assert()s when we
             // delete FFlag::LuauSolverV2.
@@ -149,7 +159,7 @@ void findCyclicTypes(std::set<TypeId>& cycles, std::set<TypePackId>& cycleTPs, T
 
 static std::pair<bool, std::optional<Luau::Name>> canUseTypeNameInScope(ScopePtr scope, const std::string& name)
 {
-    for (ScopePtr curr = scope; curr; curr = curr->parent)
+    for (ScopePtr curr = std::move(scope); curr; curr = curr->parent)
     {
         for (const auto& [importName, nameTable] : curr->importedTypeBindings)
         {
@@ -410,7 +420,10 @@ struct TypeStringifier
         if (prop.isShared())
         {
             emitKey(name);
-            stringify(prop.type());
+            if (FFlag::LuauRemoveTypeCallsForReadWriteProps)
+                stringify(*prop.readTy);
+            else
+                stringify(prop.type_DEPRECATED());
             return;
         }
 
@@ -437,11 +450,11 @@ struct TypeStringifier
 
     void stringify(const std::string& name, const Property& prop)
     {
-        if (FFlag::LuauSolverV2)
+        if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
             return _newStringify(name, prop);
 
         emitKey(name);
-        stringify(prop.type());
+        stringify(prop.type_DEPRECATED());
     }
 
     void stringify(TypePackId tp);
@@ -500,9 +513,44 @@ struct TypeStringifier
     {
         state.result.invalid = true;
 
-        // TODO: ftv.lowerBound and ftv.upperBound should always be non-nil when
-        // the new solver is used. This can be replaced with an assert.
-        if (FFlag::LuauSolverV2 && ftv.lowerBound && ftv.upperBound)
+        // Free types are guaranteed to have upper and lower bounds now.
+        if (FFlag::LuauSolverAgnosticStringification)
+        {
+            LUAU_ASSERT(ftv.lowerBound);
+            LUAU_ASSERT(ftv.upperBound);
+            const TypeId lowerBound = follow(ftv.lowerBound);
+            const TypeId upperBound = follow(ftv.upperBound);
+            if (get<NeverType>(lowerBound) && get<UnknownType>(upperBound))
+            {
+                state.emit("'");
+                state.emit(state.getName(ty));
+                if (FInt::DebugLuauVerboseTypeNames >= 1)
+                    state.emit(ftv.polarity);
+            }
+            else
+            {
+                state.emit("(");
+                if (!get<NeverType>(lowerBound))
+                {
+                    stringify(lowerBound);
+                    state.emit(" <: ");
+                }
+                state.emit("'");
+                state.emit(state.getName(ty));
+
+                if (FInt::DebugLuauVerboseTypeNames >= 1)
+                    state.emit(ftv.polarity);
+
+                if (!get<UnknownType>(upperBound))
+                {
+                    state.emit(" <: ");
+                    stringify(upperBound);
+                }
+                state.emit(")");
+            }
+            return;
+        }
+        else if (FFlag::LuauSolverV2 && ftv.lowerBound && ftv.upperBound)
         {
             const TypeId lowerBound = follow(ftv.lowerBound);
             const TypeId upperBound = follow(ftv.upperBound);
@@ -542,13 +590,16 @@ struct TypeStringifier
 
         state.emit(state.getName(ty));
 
-        if (FFlag::LuauSolverV2 && FInt::DebugLuauVerboseTypeNames >= 1)
+        if (FFlag::LuauSolverAgnosticStringification && FInt::DebugLuauVerboseTypeNames >= 1)
             state.emit(ftv.polarity);
+        else if (FFlag::LuauSolverV2 && FInt::DebugLuauVerboseTypeNames >= 1)
+            state.emit(ftv.polarity);
+
 
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
             state.emit("-");
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
                 state.emitLevel(ftv.scope);
             else
                 state.emit(ftv.level);
@@ -580,7 +631,7 @@ struct TypeStringifier
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
             state.emit("-");
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
                 state.emitLevel(gtv.scope);
             else
                 state.emit(gtv.level);
@@ -683,7 +734,7 @@ struct TypeStringifier
             state.emit(">");
         }
 
-        if (FFlag::LuauSolverV2)
+        if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
         {
             if (ftv.isCheckedFunction)
                 state.emit("@checked ");
@@ -780,10 +831,12 @@ struct TypeStringifier
 
         std::string openbrace = "@@@";
         std::string closedbrace = "@@@?!";
-        switch (state.opts.hideTableKind ? (FFlag::LuauSolverV2 ? TableState::Sealed : TableState::Unsealed) : ttv.state)
+        switch (state.opts.hideTableKind
+                    ? ((FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification) ? TableState::Sealed : TableState::Unsealed)
+                    : ttv.state)
         {
         case TableState::Sealed:
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
             {
                 openbrace = "{";
                 closedbrace = "}";
@@ -796,7 +849,7 @@ struct TypeStringifier
             }
             break;
         case TableState::Unsealed:
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
             {
                 state.result.invalid = true;
                 openbrace = "{|";
@@ -959,34 +1012,21 @@ struct TypeStringifier
             if (needParens)
                 state.emit(")");
 
-            if (FFlag::LuauStringPartLengthLimit)
-                resultsLength += state.result.name.length();
-
+            resultsLength += state.result.name.length();
             results.push_back(std::move(state.result.name));
 
             state.result.name = std::move(saved);
 
-            if (FFlag::LuauStringPartLengthLimit)
-            {
-                lengthLimitHit = state.opts.maxTypeLength > 0 && resultsLength > state.opts.maxTypeLength;
+            lengthLimitHit = state.opts.maxTypeLength > 0 && resultsLength > state.opts.maxTypeLength;
 
-                if (lengthLimitHit)
-                    break;
-            }
+            if (lengthLimitHit)
+                break;
         }
 
         state.unsee(&uv);
 
-        if (FFlag::LuauStringPartLengthLimit)
-        {
-            if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
-                std::sort(results.begin(), results.end());
-        }
-        else
-        {
-            if (!FFlag::DebugLuauToStringNoLexicalSort)
-                std::sort(results.begin(), results.end());
-        }
+        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+            std::sort(results.begin(), results.end());
 
         if (optional && results.size() > 1)
             state.emit("(");
@@ -1049,34 +1089,21 @@ struct TypeStringifier
             if (needParens)
                 state.emit(")");
 
-            if (FFlag::LuauStringPartLengthLimit)
-                resultsLength += state.result.name.length();
-
+            resultsLength += state.result.name.length();
             results.push_back(std::move(state.result.name));
 
             state.result.name = std::move(saved);
 
-            if (FFlag::LuauStringPartLengthLimit)
-            {
-                lengthLimitHit = state.opts.maxTypeLength > 0 && resultsLength > state.opts.maxTypeLength;
+            lengthLimitHit = state.opts.maxTypeLength > 0 && resultsLength > state.opts.maxTypeLength;
 
-                if (lengthLimitHit)
-                    break;
-            }
+            if (lengthLimitHit)
+                break;
         }
 
         state.unsee(&uv);
 
-        if (FFlag::LuauStringPartLengthLimit)
-        {
-            if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
-                std::sort(results.begin(), results.end());
-        }
-        else
-        {
-            if (!FFlag::DebugLuauToStringNoLexicalSort)
-                std::sort(results.begin(), results.end());
-        }
+        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+            std::sort(results.begin(), results.end());
 
         bool first = true;
         bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit || isOverloadedFunction(ty);
@@ -1337,7 +1364,7 @@ struct TypePackStringifier
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
             state.emit("-");
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
                 state.emitLevel(pack.scope);
             else
                 state.emit(pack.level);
@@ -1359,7 +1386,7 @@ struct TypePackStringifier
         if (FInt::DebugLuauVerboseTypeNames >= 2)
         {
             state.emit("-");
-            if (FFlag::LuauSolverV2)
+            if (FFlag::LuauSolverV2 || FFlag::LuauSolverAgnosticStringification)
                 state.emitLevel(pack.scope);
             else
                 state.emit(pack.level);
@@ -1878,6 +1905,39 @@ std::string dump(const std::optional<TypePackId>& ty)
     return "nullopt";
 }
 
+std::string dump(const std::vector<TypeId>& types)
+{
+    return toStringVector(types, dumpOptions());
+}
+
+std::string dump(DenseHashMap<TypeId, TypeId>& types)
+{
+    std::string s = "{";
+    ToStringOptions& opts = dumpOptions();
+    for (const auto& [key, value] : types)
+    {
+        if (s.length() > 1)
+            s += ", ";
+        s += toString(key, opts) + " : " + toString(value, opts);
+    }
+    s += "}";
+    return s;
+}
+
+std::string dump(DenseHashMap<TypePackId, TypePackId>& types)
+{
+    std::string s = "{";
+    ToStringOptions& opts = dumpOptions();
+    for (const auto& [key, value] : types)
+    {
+        if (s.length() > 1)
+            s += ", ";
+        s += toString(key, opts) + " : " + toString(value, opts);
+    }
+    s += "}";
+    return s;
+}
+
 std::string dump(const ScopePtr& scope, const char* name)
 {
     auto binding = scope->linearSearchForBinding(name);
@@ -1984,7 +2044,7 @@ std::string toString(const Constraint& constraint, ToStringOptions& opts)
             return tos(c.resultType) + " ~ hasIndexer " + tos(c.subjectType) + " " + tos(c.indexType);
         }
         else if constexpr (std::is_same_v<T, AssignPropConstraint>)
-            return "assignProp " + tos(c.lhsType) + " " + c.propName + " " + tos(c.rhsType);
+            return tos(c.propType) + " ~ assignProp " + tos(c.lhsType) + " " + c.propName + " " + tos(c.rhsType);
         else if constexpr (std::is_same_v<T, AssignIndexConstraint>)
             return "assignIndex " + tos(c.lhsType) + " " + tos(c.indexType) + " " + tos(c.rhsType);
         else if constexpr (std::is_same_v<T, UnpackConstraint>)
@@ -2001,6 +2061,8 @@ std::string toString(const Constraint& constraint, ToStringOptions& opts)
             return "table_check " + tos(c.expectedType) + " :> " + tos(c.exprType);
         else if constexpr (std::is_same_v<T, SimplifyConstraint>)
             return "simplify " + tos(c.ty);
+        else if constexpr (std::is_same_v<T, PushFunctionTypeConstraint>)
+            return "push_function_type " + tos(c.expectedFunctionType) + " => " + tos(c.functionType);
         else
             static_assert(always_false_v<T>, "Non-exhaustive constraint switch");
     };

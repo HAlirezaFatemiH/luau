@@ -17,8 +17,15 @@
 
 using namespace Luau;
 
+LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+
 LUAU_FASTFLAG(LuauSolverV2)
+LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauIceLess)
+LUAU_FASTFLAG(LuauPushFunctionTypesInFunctionStatement)
+LUAU_FASTFLAG(LuauSimplifyAnyAndUnion)
+LUAU_FASTFLAG(LuauLimitDynamicConstraintSolving)
 
 struct LimitFixture : BuiltinsFixture
 {
@@ -47,7 +54,7 @@ TEST_CASE_FIXTURE(LimitFixture, "typescript_port_of_Result_type")
 {
     DOES_NOT_PASS_NEW_SOLVER_GUARD();
 
-    constexpr const char* src = R"LUA(
+    constexpr const char* src = R"LUAU(
         --!strict
 
         -- Big thanks to Dionysusnu by letting us use this code as part of our test suite!
@@ -272,11 +279,94 @@ TEST_CASE_FIXTURE(LimitFixture, "typescript_port_of_Result_type")
         return {
             Result = Result,
         }
-    )LUA";
+    )LUAU";
 
     CheckResult result = check(src);
 
     CHECK(hasError<CodeTooComplex>(result));
+}
+
+TEST_CASE_FIXTURE(LimitFixture, "Signal_exerpt" * doctest::timeout(0.5))
+{
+    ScopedFastFlag sff[] = {
+        // These flags are required to surface the problem.
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauEagerGeneralization4, true},
+        {FFlag::LuauPushFunctionTypesInFunctionStatement, true},
+
+        // And this flag is the one that fixes it.
+        {FFlag::LuauSimplifyAnyAndUnion, true},
+    };
+
+    constexpr const char* src = R"LUAU(
+        local Signal = {}
+        Signal.ClassName = "Signal"
+        export type Signal<T...> = typeof(setmetatable(
+            {} :: {},
+            {} :: typeof({ __index = Signal })
+        ))
+        function Signal.new<T...>(): Signal<T...>
+            return nil :: any
+        end
+
+        function Signal.Connect<T...>(self: Signal<T...>)
+        end
+
+        function Signal.DisconnectAll<T...>(self: Signal<T...>): ()
+            self._handlerListHead = false
+        end
+
+        function Signal.Fire<T...>(self: Signal<T...>): ()
+            local connection
+            rawget(connection, "_signal")
+        end
+
+        function Signal.Wait<T...>(self: Signal<T...>)
+            connection = self:Connect(function()
+                connection:Disconnect()
+            end)
+        end
+
+        function Signal.Once<T...>(self: Signal<T...>, fn: SignalHandler<T...>): Connection<T...>
+            connection = self:Connect(function() end)
+        end
+    )LUAU";
+
+    CheckResult result = check(src);
+
+    (void)result;
+}
+
+TEST_CASE_FIXTURE(Fixture, "limit_number_of_dynamically_created_constraints")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauLimitDynamicConstraintSolving, true},
+    };
+
+    constexpr const char* src = R"(
+        type Array<T> = {T}
+
+        type Hello = Array<Array<Array<Array<Array<Array<Array<Array<Array<Array<number>>>>>>>>>>
+    )";
+
+    {
+        ScopedFastInt sfi{FInt::LuauSolverConstraintLimit, 1};
+        CheckResult result = check(src);
+        LUAU_CHECK_ERROR(result, CodeTooComplex);
+    }
+
+    {
+        ScopedFastInt sfi{FInt::LuauSolverConstraintLimit, 1000};
+        CheckResult result = check(src);
+        LUAU_CHECK_NO_ERRORS(result);
+    }
+
+    {
+        ScopedFastInt sfi{FInt::LuauSolverConstraintLimit, 0};
+        CheckResult result = check(src);
+        LUAU_CHECK_NO_ERRORS(result);
+    }
 }
 
 TEST_SUITE_END();

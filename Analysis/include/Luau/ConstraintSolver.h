@@ -11,6 +11,7 @@
 #include "Luau/Location.h"
 #include "Luau/Module.h"
 #include "Luau/Normalize.h"
+#include "Luau/OrderedSet.h"
 #include "Luau/Substitution.h"
 #include "Luau/ToString.h"
 #include "Luau/Type.h"
@@ -101,6 +102,11 @@ struct ConstraintSolver
     // scope tree.
     std::vector<std::unique_ptr<Constraint>> solverConstraints;
 
+    // Ticks downward toward zero each time a new constraint is pushed into
+    // solverConstraints. When this counter reaches zero, the type inference
+    // engine reports a CodeTooComplex error and aborts.
+    size_t solverConstraintLimit = 0;
+
     // This includes every constraint that has not been fully solved.
     // A constraint can be both blocked and unsolved, for instance.
     std::vector<NotNull<const Constraint>> unsolvedConstraints;
@@ -121,8 +127,12 @@ struct ConstraintSolver
     // A mapping from free types to the number of unresolved constraints that mention them.
     DenseHashMap<TypeId, size_t> unresolvedConstraints{{}};
 
-    std::unordered_map<NotNull<const Constraint>, DenseHashSet<TypeId>> maybeMutatedFreeTypes;
-    std::unordered_map<TypeId, DenseHashSet<const Constraint*>> mutatedFreeTypeToConstraint;
+    // Clip with LuauUseOrderedTypeSetsInConstraints
+    std::unordered_map<NotNull<const Constraint>, DenseHashSet<TypeId>> maybeMutatedFreeTypes_DEPRECATED;
+    std::unordered_map<TypeId, DenseHashSet<const Constraint*>> mutatedFreeTypeToConstraint_DEPRECATED;
+
+    std::unordered_map<NotNull<const Constraint>, TypeIds> maybeMutatedFreeTypes;
+    std::unordered_map<TypeId, OrderedSet<const Constraint*>> mutatedFreeTypeToConstraint;
 
     // Irreducible/uninhabited type functions or type pack functions.
     DenseHashSet<const void*> uninhabitedTypeFunctions{{}};
@@ -249,7 +259,9 @@ public:
     bool tryDispatch(const ReducePackConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const EqualityConstraint& c, NotNull<const Constraint> constraint);
 
-    bool tryDispatch(const SimplifyConstraint& c, NotNull<const Constraint> constraint);
+    bool tryDispatch(const SimplifyConstraint& c, NotNull<const Constraint> constraint, bool force);
+
+    bool tryDispatch(const PushFunctionTypeConstraint& c, NotNull<const Constraint> constraint);
 
     // for a, ... in some_table do
     // also handles __iter metamethod
@@ -438,9 +450,6 @@ public:
     TypeId simplifyIntersection(NotNull<Scope> scope, Location location, TypeId left, TypeId right);
     TypeId simplifyIntersection(NotNull<Scope> scope, Location location, std::set<TypeId> parts);
     TypeId simplifyUnion(NotNull<Scope> scope, Location location, TypeId left, TypeId right);
-
-    TypeId errorRecoveryType() const;
-    TypePackId errorRecoveryTypePack() const;
 
     TypePackId anyifyModuleReturnTypePackGenerics(TypePackId tp);
 

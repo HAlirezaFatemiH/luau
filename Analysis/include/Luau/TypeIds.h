@@ -32,8 +32,8 @@ public:
     TypeIds(const TypeIds&) = default;
     TypeIds& operator=(const TypeIds&) = default;
 
-    TypeIds(TypeIds&&) = default;
-    TypeIds& operator=(TypeIds&&) = default;
+    TypeIds(TypeIds&&) noexcept = default;
+    TypeIds& operator=(TypeIds&&) noexcept = default;
 
     void insert(TypeId ty);
     /// Erase every element that does not also occur in tys
@@ -62,6 +62,12 @@ public:
     bool operator==(const TypeIds& there) const;
     size_t getHash() const;
     bool isNever() const;
+
+    /**
+     * Moves the contents of this container into a `std::vector` and returns it.
+     * This container will be empty after `take` is called.
+     */
+    std::vector<TypeId> take();
 };
 
 } // namespace Luau

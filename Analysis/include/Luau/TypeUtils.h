@@ -40,11 +40,11 @@ struct InConditionalContext
     TypeContext* typeContext;
     TypeContext oldValue;
 
-    explicit InConditionalContext(TypeContext* c)
+    explicit InConditionalContext(TypeContext* c, TypeContext newValue = TypeContext::Condition)
         : typeContext(c)
         , oldValue(*c)
     {
-        *typeContext = TypeContext::Condition;
+        *typeContext = newValue;
     }
 
     ~InConditionalContext()
@@ -317,5 +317,51 @@ std::optional<TypeId> extractMatchingTableType(std::vector<TypeId>& tables, Type
  * ```
  */
 bool isRecord(const AstExprTable::Item& item);
+
+/**
+ * Do a quick check for whether the type `ty` is exactly `false | nil`. This
+ * will *not* do any sort of semantic analysis, for example the type:
+ *
+ *      (boolean?) & (false | nil)
+ *
+ * ... will not be considered falsy, despite it being semantically equivalent
+ * to `false | nil`.
+ *
+ * @return Whether the input is approximately `false | nil`.
+ */
+bool isApproximatelyFalsyType(TypeId ty);
+
+/**
+ * Do a quick check for whether the type `ty` is exactly `~(false | nil)`.
+ * This will *not* do any sort of semantic analysis, for example the type:
+ *
+ *      unknown & ~(false | nil)
+ *
+ * ... will not be considered falsy, despite it being semantically equivalent
+ * to `~(false | nil)`.
+ *
+ * @return Whether the input is approximately `~(false | nil)`.
+ */
+bool isApproximatelyTruthyType(TypeId ty);
+
+// Unwraps any grouping expressions iteratively.
+AstExpr* unwrapGroup(AstExpr* expr);
+
+// These are magic types used in `TypeChecker2` and `NonStrictTypeChecker`
+//
+// `_luau_print` causes it's argument to be printed out, as in:
+//
+//      local x: _luau_print<number>
+//
+// ... will cause `number` to be printed.
+inline constexpr char kLuauPrint[] = "_luau_print";
+// `_luau_force_constraint_solving_incomplete` will cause us to _always_ emit
+// a constraint solving incomplete error to test semantics around that specific
+// error.
+inline constexpr char kLuauForceConstraintSolvingIncomplete[] = "_luau_force_constraint_solving_incomplete";
+// `_luau_blocked_type` will cause us to always mint a blocked type that does
+// not get emplaced by constraint solving.
+inline constexpr char kLuauBlockedType[] = "_luau_blocked_type";
+
 
 } // namespace Luau

@@ -12,10 +12,10 @@
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauAddCallConstraintForIterableFunctions)
-LUAU_FASTFLAG(LuauEagerGeneralization2)
-LUAU_FASTFLAG(LuauOptimizeFalsyAndTruthyIntersect)
-LUAU_FASTFLAG(LuauClipVariadicAnysFromArgsToGenericFuncs2)
+LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
+LUAU_FASTFLAG(DebugLuauMagicTypes)
+LUAU_FASTFLAG(LuauLimitDynamicConstraintSolving)
 
 using namespace Luau;
 
@@ -37,13 +37,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "dcr_require_basic")
         local b = A.a
     )";
 
-    CheckResult aResult = frontend.check("game/A");
+    CheckResult aResult = getFrontend().check("game/A");
     LUAU_REQUIRE_NO_ERRORS(aResult);
 
-    CheckResult bResult = frontend.check("game/B");
+    CheckResult bResult = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(bResult);
 
-    ModulePtr b = frontend.moduleResolver.getModule("game/B");
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
     REQUIRE(b != nullptr);
     std::optional<TypeId> bType = requireType(b, "b");
     REQUIRE(bType);
@@ -79,15 +79,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require")
         )";
     }
 
-    CheckResult aResult = frontend.check("game/A");
+    CheckResult aResult = getFrontend().check("game/A");
     dumpErrors(aResult);
     LUAU_REQUIRE_NO_ERRORS(aResult);
 
-    CheckResult bResult = frontend.check("game/B");
+    CheckResult bResult = getFrontend().check("game/B");
     dumpErrors(bResult);
     LUAU_REQUIRE_NO_ERRORS(bResult);
 
-    ModulePtr b = frontend.moduleResolver.getModule("game/B");
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
 
     REQUIRE(b != nullptr);
 
@@ -114,10 +114,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_types")
         local h: Hooty.Point
     )";
 
-    CheckResult bResult = frontend.check("workspace/B");
+    CheckResult bResult = getFrontend().check("workspace/B");
     LUAU_REQUIRE_NO_ERRORS(bResult);
 
-    ModulePtr b = frontend.moduleResolver.getModule("workspace/B");
+    ModulePtr b = getFrontend().moduleResolver.getModule("workspace/B");
     REQUIRE(b != nullptr);
 
     TypeId hType = requireType(b, "h");
@@ -137,9 +137,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_a_variadic_function")
         local f = A.f
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
 
-    ModulePtr bModule = frontend.moduleResolver.getModule("game/B");
+    ModulePtr bModule = getFrontend().moduleResolver.getModule("game/B");
     REQUIRE(bModule != nullptr);
 
     TypeId f = follow(requireType(bModule, "f"));
@@ -170,13 +170,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_module_table_freeze")
         return table.freeze(require(game.A))
     )";
 
-    CheckResult aResult = frontend.check("game/A");
+    CheckResult aResult = getFrontend().check("game/A");
     LUAU_REQUIRE_NO_ERRORS(aResult);
 
-    CheckResult bResult = frontend.check("game/B");
+    CheckResult bResult = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(bResult);
 
-    ModulePtr a = frontend.moduleResolver.getModule("game/A");
+    ModulePtr a = getFrontend().moduleResolver.getModule("game/A");
     REQUIRE(a != nullptr);
     // confirm that no cross-module mutation happened here!
     if (FFlag::LuauSolverV2)
@@ -184,7 +184,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_module_table_freeze")
     else
         CHECK(toString(a->returnType) == "{| a: number |}");
 
-    ModulePtr b = frontend.moduleResolver.getModule("game/B");
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
     REQUIRE(b != nullptr);
     // confirm that no cross-module mutation happened here!
     if (FFlag::LuauSolverV2)
@@ -216,11 +216,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_module_that_does_not_export")
     fileResolver.source["game/Workspace/A"] = sourceA;
     fileResolver.source["game/Workspace/B"] = sourceB;
 
-    frontend.check("game/Workspace/A");
-    frontend.check("game/Workspace/B");
+    getFrontend().check("game/Workspace/A");
+    getFrontend().check("game/Workspace/B");
 
-    ModulePtr aModule = frontend.moduleResolver.getModule("game/Workspace/A");
-    ModulePtr bModule = frontend.moduleResolver.getModule("game/Workspace/B");
+    ModulePtr aModule = getFrontend().moduleResolver.getModule("game/Workspace/A");
+    ModulePtr bModule = getFrontend().moduleResolver.getModule("game/Workspace/B");
 
     CHECK(aModule->errors.empty());
     REQUIRE_EQ(1, bModule->errors.size());
@@ -240,7 +240,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "warn_if_you_try_to_require_a_non_modulescrip
         local M = require(script.Parent.A)
     )";
 
-    CheckResult result = frontend.check("Modules/B");
+    CheckResult result = getFrontend().check("Modules/B");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
@@ -261,7 +261,7 @@ local a : string = ""
 a = tbl.abc.def
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ("Type 'number' could not be converted into 'string'", toString(result.errors[0]));
 }
@@ -276,7 +276,7 @@ return { def = 4 }
 local tbl: string = require(game.A)
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     if (FFlag::LuauSolverV2)
         CHECK_EQ("Type '{ def: number }' could not be converted into 'string'", toString(result.errors[0]));
@@ -324,7 +324,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_failed_module")
 return unfortunately()
     )";
 
-    CheckResult aResult = frontend.check("game/A");
+    CheckResult aResult = getFrontend().check("game/A");
     LUAU_REQUIRE_ERRORS(aResult);
 
     CheckResult result = check(R"(
@@ -351,7 +351,7 @@ local x: Type = {}
 function x:Destroy(): () end
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 }
 
@@ -369,7 +369,7 @@ local x: Type = { x = { a = 2 } }
 type Rename = typeof(x.x)
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
@@ -388,7 +388,7 @@ local x: Type = types
 type Rename = typeof(x.x)
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
@@ -462,7 +462,7 @@ local a: A.T = { x = 2 }
 local b: B.T = a
     )";
 
-    CheckResult result = frontend.check("game/C");
+    CheckResult result = getFrontend().check("game/C");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     if (FFlag::LuauSolverV2)
@@ -508,7 +508,7 @@ local a: A.T = { x = 2 }
 local b: B.T = a
     )";
 
-    CheckResult result = frontend.check("game/D");
+    CheckResult result = getFrontend().check("game/D");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     if (FFlag::LuauSolverV2)
@@ -539,7 +539,7 @@ local l0 = require(game.A)
 return l0
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
@@ -584,7 +584,7 @@ return l0
 TEST_CASE_FIXTURE(BuiltinsFixture, "ensure_scope_is_nullptr_after_shallow_copy")
 {
     ScopedFastFlag _{FFlag::LuauSolverV2, true};
-    frontend.options.retainFullTypeGraphs = false;
+    getFrontend().options.retainFullTypeGraphs = false;
 
     fileResolver.source["game/A"] = R"(
 -- Roughly taken from ReactTypes.lua
@@ -746,14 +746,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "spooky_blocked_type_laundered_by_bound_type"
         local _ = require(game.A);
     )");
 
-    if (FFlag::LuauAddCallConstraintForIterableFunctions && !FFlag::LuauOptimizeFalsyAndTruthyIntersect)
-    {
-        LUAU_REQUIRE_ERROR_COUNT(3, result);
-    }
-    else
-    {
-        LUAU_REQUIRE_NO_ERRORS(result);
-    }
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "leaky_generics")
@@ -785,7 +778,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "leaky_generics")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization2)
+    if (FFlag::LuauEagerGeneralization4)
     {
         CHECK_EQ("(unknown) -> unknown", toString(requireTypeAtPosition({13, 23})));
     }
@@ -825,14 +818,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cycles_dont_make_everything_any")
         return module
     )";
 
-    frontend.check("game/A");
+    getFrontend().check("game/A");
 
-    CHECK("module" == toString(frontend.moduleResolver.getModule("game/B")->returnType));
+    CHECK("module" == toString(getFrontend().moduleResolver.getModule("game/B")->returnType));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cross_module_function_mutation")
 {
-    ScopedFastFlag _[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuauClipVariadicAnysFromArgsToGenericFuncs2, true}};
+    ScopedFastFlag _[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuauReturnMappedGenericPacksFromSubtyping2, true}};
 
     fileResolver.source["game/A"] = R"(
 function test2(a: number, b: string)
@@ -851,9 +844,27 @@ local test2 = require(game.A)
 return wrapper(test2, 1, "")
     )";
 
-    CheckResult result = frontend.check("game/B");
+    CheckResult result = getFrontend().check("game/B");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "internal_types_are_scrubbed_from_module")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::DebugLuauMagicTypes, true},
+        {FFlag::LuauLimitDynamicConstraintSolving, true}
+    };
+
+    fileResolver.source["game/A"] = R"(
+return function(): _luau_blocked_type return nil :: any end
+    )";
+
+    CheckResult result = getFrontend().check("game/A");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<InternalError>(result.errors[0]));
+    CHECK("(...any) -> *error-type*" == toString(getFrontend().moduleResolver.getModule("game/A")->returnType));
 }
 
 TEST_SUITE_END();

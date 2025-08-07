@@ -2,8 +2,8 @@
 #include "Luau/Frontend.h"
 
 #include "Luau/BuiltinDefinitions.h"
-#include "Luau/Clone.h"
 #include "Luau/Common.h"
+#include "Luau/Clone.h"
 #include "Luau/Config.h"
 #include "Luau/ConstraintGenerator.h"
 #include "Luau/ConstraintSolver.h"
@@ -18,8 +18,6 @@
 #include "Luau/Scope.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
-#include "Luau/ToString.h"
-#include "Luau/Transpiler.h"
 #include "Luau/TypeArena.h"
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeInfer.h"
@@ -40,14 +38,18 @@ LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(LuauInferInNoCheckMode)
 LUAU_FASTFLAGVARIABLE(LuauKnowsTheDataModel3)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauEagerGeneralization2)
+LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolverToJson)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolverToJsonFile)
 LUAU_FASTFLAGVARIABLE(DebugLuauForbidInternalTypes)
 LUAU_FASTFLAGVARIABLE(DebugLuauForceStrictMode)
 LUAU_FASTFLAGVARIABLE(DebugLuauForceNonStrictMode)
-LUAU_FASTFLAGVARIABLE(LuauNewSolverTypecheckCatchTimeouts)
 LUAU_FASTFLAGVARIABLE(LuauExpectedTypeVisitor)
+LUAU_FASTFLAGVARIABLE(LuauTrackTypeAllocations)
+LUAU_FASTFLAGVARIABLE(LuauUseWorkspacePropToChooseSolver)
+LUAU_FASTFLAGVARIABLE(LuauNewNonStrictSuppressSoloConstraintSolvingIncomplete)
+LUAU_FASTFLAGVARIABLE(DebugLuauAlwaysShowConstraintSolvingIncomplete)
+LUAU_FASTFLAG(LuauLimitDynamicConstraintSolving)
 
 namespace Luau
 {
@@ -207,16 +209,16 @@ LoadDefinitionFileResult Frontend::loadDefinitionFile(
 
     Luau::ParseResult parseResult = parseSourceForModule(source, sourceModule, captureComments);
     if (parseResult.errors.size() > 0)
-        return LoadDefinitionFileResult{false, parseResult, sourceModule, nullptr};
+        return LoadDefinitionFileResult{false, std::move(parseResult), std::move(sourceModule), nullptr};
 
     ModulePtr checkedModule = check(sourceModule, Mode::Definition, {}, std::nullopt, /*forAutocomplete*/ false, /*recordJsonLog*/ false, {});
 
     if (checkedModule->errors.size() > 0)
-        return LoadDefinitionFileResult{false, parseResult, sourceModule, checkedModule};
+        return LoadDefinitionFileResult{false, std::move(parseResult), std::move(sourceModule), std::move(checkedModule)};
 
-    persistCheckedTypes(checkedModule, globals, targetScope, packageName);
+    persistCheckedTypes(checkedModule, globals, std::move(targetScope), packageName);
 
-    return LoadDefinitionFileResult{true, parseResult, sourceModule, checkedModule};
+    return LoadDefinitionFileResult{true, std::move(parseResult), std::move(sourceModule), std::move(checkedModule)};
 }
 
 namespace
@@ -388,15 +390,31 @@ double getTimestamp()
 } // namespace
 
 Frontend::Frontend(FileResolver* fileResolver, ConfigResolver* configResolver, const FrontendOptions& options)
-    : builtinTypes(NotNull{&builtinTypes_})
+    : useNewLuauSolver(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old)
+    , builtinTypes(NotNull{&builtinTypes_})
     , fileResolver(fileResolver)
     , moduleResolver(this)
     , moduleResolverForAutocomplete(this)
-    , globals(builtinTypes)
-    , globalsForAutocomplete(builtinTypes)
+    , globals(builtinTypes, getLuauSolverMode())
+    , globalsForAutocomplete(builtinTypes, getLuauSolverMode())
     , configResolver(configResolver)
     , options(options)
 {
+}
+
+void Frontend::setLuauSolverSelectionFromWorkspace(SolverMode mode)
+{
+    useNewLuauSolver.store(mode);
+}
+
+SolverMode Frontend::getLuauSolverMode() const
+{
+    if (FFlag::LuauUseWorkspacePropToChooseSolver)
+        return useNewLuauSolver.load();
+    else if (FFlag::LuauSolverV2)
+        return SolverMode::New;
+    else
+        return SolverMode::Old;
 }
 
 void Frontend::parse(const ModuleName& name)
@@ -449,7 +467,7 @@ CheckResult Frontend::check(const ModuleName& name, std::optional<FrontendOption
     LUAU_TIMETRACE_ARGUMENT("name", name.c_str());
 
     FrontendOptions frontendOptions = optionOverride.value_or(options);
-    if (FFlag::LuauSolverV2)
+    if (getLuauSolverMode() == SolverMode::New)
         frontendOptions.forAutocomplete = false;
 
     if (std::optional<CheckResult> result = getCheckResult(name, true, frontendOptions.forAutocomplete))
@@ -509,7 +527,7 @@ std::vector<ModuleName> Frontend::checkQueuedModules(
 )
 {
     FrontendOptions frontendOptions = optionOverride.value_or(options);
-    if (FFlag::LuauSolverV2)
+    if (getLuauSolverMode() == SolverMode::New)
         frontendOptions.forAutocomplete = false;
 
     // By taking data into locals, we make sure queue is cleared at the end, even if an ICE or a different exception is thrown
@@ -694,7 +712,7 @@ std::vector<ModuleName> Frontend::checkQueuedModules(
 
 std::optional<CheckResult> Frontend::getCheckResult(const ModuleName& name, bool accumulateNested, bool forAutocomplete)
 {
-    if (FFlag::LuauSolverV2)
+    if (getLuauSolverMode() == SolverMode::New)
         forAutocomplete = false;
 
     auto it = sourceNodes.find(name);
@@ -970,7 +988,7 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
             environmentScope,
             /*forAutocomplete*/ true,
             /*recordJsonLog*/ false,
-            typeCheckLimits
+            std::move(typeCheckLimits)
         );
 
         double duration = getTimestamp() - timestamp;
@@ -983,6 +1001,15 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
         item.stats.timeCheck += duration;
         item.stats.filesStrict += 1;
 
+        if (FFlag::LuauTrackTypeAllocations && item.options.collectTypeAllocationStats)
+        {
+            item.stats.typesAllocated += moduleForAutocomplete->internalTypes.types.size();
+            item.stats.typePacksAllocated += moduleForAutocomplete->internalTypes.typePacks.size();
+            item.stats.boolSingletonsMinted += moduleForAutocomplete->internalTypes.boolSingletonsMinted;
+            item.stats.strSingletonsMinted += moduleForAutocomplete->internalTypes.strSingletonsMinted;
+            item.stats.uniqueStrSingletonsMinted += moduleForAutocomplete->internalTypes.uniqueStrSingletonsMinted.size();
+        }
+
         if (item.options.customModuleCheck)
             item.options.customModuleCheck(sourceModule, *moduleForAutocomplete);
 
@@ -990,7 +1017,8 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
         return;
     }
 
-    ModulePtr module = check(sourceModule, mode, requireCycles, environmentScope, /*forAutocomplete*/ false, item.recordJsonLog, typeCheckLimits);
+    ModulePtr module =
+        check(sourceModule, mode, requireCycles, environmentScope, /*forAutocomplete*/ false, item.recordJsonLog, std::move(typeCheckLimits));
 
     double duration = getTimestamp() - timestamp;
 
@@ -1003,10 +1031,19 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
     item.stats.filesStrict += mode == Mode::Strict;
     item.stats.filesNonstrict += mode == Mode::Nonstrict;
 
+    if (FFlag::LuauTrackTypeAllocations && item.options.collectTypeAllocationStats)
+    {
+        item.stats.typesAllocated += module->internalTypes.types.size();
+        item.stats.typePacksAllocated += module->internalTypes.typePacks.size();
+        item.stats.boolSingletonsMinted += module->internalTypes.boolSingletonsMinted;
+        item.stats.strSingletonsMinted += module->internalTypes.strSingletonsMinted;
+        item.stats.uniqueStrSingletonsMinted += module->internalTypes.uniqueStrSingletonsMinted.size();
+    }
+
     if (item.options.customModuleCheck)
         item.options.customModuleCheck(sourceModule, *module);
 
-    if (FFlag::LuauSolverV2 && mode == Mode::NoCheck)
+    if ((getLuauSolverMode() == SolverMode::New) && mode == Mode::NoCheck)
         module->errors.clear();
 
     if (item.options.runLintChecks)
@@ -1124,6 +1161,16 @@ void Frontend::recordItemResult(const BuildQueueItem& item)
 
     stats.filesStrict += item.stats.filesStrict;
     stats.filesNonstrict += item.stats.filesNonstrict;
+
+    if (FFlag::LuauTrackTypeAllocations && item.options.collectTypeAllocationStats)
+    {
+        stats.typesAllocated += item.stats.typesAllocated;
+        stats.typePacksAllocated += item.stats.typePacksAllocated;
+
+        stats.boolSingletonsMinted += item.stats.boolSingletonsMinted;
+        stats.strSingletonsMinted += item.stats.strSingletonsMinted;
+        stats.uniqueStrSingletonsMinted += item.stats.uniqueStrSingletonsMinted;
+    }
 }
 
 void Frontend::performQueueItemTask(std::shared_ptr<BuildQueueWorkState> state, size_t itemPos)
@@ -1172,7 +1219,7 @@ void Frontend::sendQueueCycleItemTask(std::shared_ptr<BuildQueueWorkState> state
 
         if (!item.processing)
         {
-            sendQueueItemTask(state, i);
+            sendQueueItemTask(std::move(state), i);
             break;
         }
     }
@@ -1314,15 +1361,20 @@ ModulePtr check(
         parentScope,
         typeFunctionScope,
         std::move(prepareModuleScope),
-        options,
-        limits,
+        std::move(options),
+        std::move(limits),
         recordJsonLog,
-        writeJsonLog
+        std::move(writeJsonLog)
     );
 }
 
 struct InternalTypeFinder : TypeOnceVisitor
 {
+    InternalTypeFinder()
+        : TypeOnceVisitor("InternalTypeFinder")
+    {
+    }
+
     bool visit(TypeId, const ExternType&) override
     {
         return false;
@@ -1393,6 +1445,8 @@ ModulePtr check(
     result->mode = mode;
     result->internalTypes.owningModule = result.get();
     result->interfaceTypes.owningModule = result.get();
+    if (FFlag::LuauTrackTypeAllocations)
+        result->internalTypes.collectSingletonStats = options.collectTypeAllocationStats;
     result->allocator = sourceModule.allocator;
     result->names = sourceModule.names;
     result->root = sourceModule.root;
@@ -1416,7 +1470,7 @@ ModulePtr check(
     unifierState.counters.recursionLimit = FInt::LuauTypeInferRecursionLimit;
     unifierState.counters.iterationLimit = limits.unifierIterationLimit.value_or(FInt::LuauTypeInferIterationLimit);
 
-    Normalizer normalizer{&result->internalTypes, builtinTypes, NotNull{&unifierState}};
+    Normalizer normalizer{&result->internalTypes, builtinTypes, NotNull{&unifierState}, SolverMode::New};
     SimplifierPtr simplifier = newSimplifier(NotNull{&result->internalTypes}, builtinTypes);
     TypeFunctionRuntime typeFunctionRuntime{iceHandler, NotNull{&limits}};
 
@@ -1438,13 +1492,13 @@ ModulePtr check(
         requireCycles
     };
 
-    // FIXME: Delete this flag when clipping FFlag::LuauEagerGeneralization2.
+    // FIXME: Delete this flag when clipping FFlag::LuauEagerGeneralization4.
     //
     // This optional<> only exists so that we can run one constructor when the flag
     // is set, and another when it is unset.
     std::optional<ConstraintSolver> cs;
 
-    if (FFlag::LuauEagerGeneralization2)
+    if (FFlag::LuauEagerGeneralization4)
     {
         ConstraintSet constraintSet = cg.run(sourceModule.root);
         result->errors = std::move(constraintSet.errors);
@@ -1522,15 +1576,15 @@ ModulePtr check(
         // If solver was interrupted, skip typechecking and replace all module results with error-supressing types to avoid leaking blocked/pending
         // types
         ScopePtr moduleScope = result->getModuleScope();
-        moduleScope->returnType = builtinTypes->errorRecoveryTypePack();
+        moduleScope->returnType = builtinTypes->errorTypePack;
 
         for (auto& [name, ty] : result->declaredGlobals)
-            ty = builtinTypes->errorRecoveryType();
+            ty = builtinTypes->errorType;
 
         for (auto& [name, tf] : result->exportedTypeBindings)
-            tf.type = builtinTypes->errorRecoveryType();
+            tf.type = builtinTypes->errorType;
     }
-    else if (FFlag::LuauNewSolverTypecheckCatchTimeouts)
+    else
     {
         try
         {
@@ -1576,40 +1630,15 @@ ModulePtr check(
             result->cancelled = true;
         }
     }
-    else
+
+    // if the only error we're producing is one about constraint solving being incomplete, we can silence it.
+    // this means we won't give this warning if types seem totally nonsensical, but there are no other errors.
+    // this is probably, on the whole, a good decision to not annoy users though.
+    if (FFlag::LuauNewNonStrictSuppressSoloConstraintSolvingIncomplete)
     {
-        switch (mode)
-        {
-        case Mode::Nonstrict:
-            Luau::checkNonStrict(
-                builtinTypes,
-                NotNull{simplifier.get()},
-                NotNull{&typeFunctionRuntime},
-                iceHandler,
-                NotNull{&unifierState},
-                NotNull{&dfg},
-                NotNull{&limits},
-                sourceModule,
-                result.get()
-            );
-            break;
-        case Mode::Definition:
-            // fallthrough intentional
-        case Mode::Strict:
-            Luau::check(
-                builtinTypes,
-                NotNull{simplifier.get()},
-                NotNull{&typeFunctionRuntime},
-                NotNull{&unifierState},
-                NotNull{&limits},
-                logger.get(),
-                sourceModule,
-                result.get()
-            );
-            break;
-        case Mode::NoCheck:
-            break;
-        };
+        if (result->errors.size() == 1 && get<ConstraintSolvingIncompleteError>(result->errors[0]) &&
+            !FFlag::DebugLuauAlwaysShowConstraintSolvingIncomplete)
+            result->errors.clear();
     }
 
     if (FFlag::LuauExpectedTypeVisitor)
@@ -1625,35 +1654,77 @@ ModulePtr check(
         sourceModule.root->visit(&etv);
     }
 
-    unfreeze(result->interfaceTypes);
-    result->clonePublicInterface(builtinTypes, *iceHandler);
-
-    if (FFlag::DebugLuauForbidInternalTypes)
+    // NOTE: This used to be done prior to cloning the public interface, but
+    // we now replace "internal" types with `*error-type*`.
+    if (FFlag::LuauLimitDynamicConstraintSolving)
     {
-        InternalTypeFinder finder;
+        if (FFlag::DebugLuauForbidInternalTypes)
+        {
+            InternalTypeFinder finder;
 
-        finder.traverse(result->returnType);
+            // `result->returnType` is not filled in yet, so we
+            // traverse the return type of the root module.
+            finder.traverse(result->getModuleScope()->returnType);
 
-        for (const auto& [_, binding] : result->exportedTypeBindings)
-            finder.traverse(binding.type);
+            for (const auto& [_, binding] : result->exportedTypeBindings)
+                finder.traverse(binding.type);
 
-        for (const auto& [_, ty] : result->astTypes)
-            finder.traverse(ty);
+            for (const auto& [_, ty] : result->astTypes)
+                finder.traverse(ty);
 
-        for (const auto& [_, ty] : result->astExpectedTypes)
-            finder.traverse(ty);
+            for (const auto& [_, ty] : result->astExpectedTypes)
+                finder.traverse(ty);
 
-        for (const auto& [_, tp] : result->astTypePacks)
-            finder.traverse(tp);
+            for (const auto& [_, tp] : result->astTypePacks)
+                finder.traverse(tp);
 
-        for (const auto& [_, ty] : result->astResolvedTypes)
-            finder.traverse(ty);
+            for (const auto& [_, ty] : result->astResolvedTypes)
+                finder.traverse(ty);
 
-        for (const auto& [_, ty] : result->astOverloadResolvedTypes)
-            finder.traverse(ty);
+            for (const auto& [_, ty] : result->astOverloadResolvedTypes)
+                finder.traverse(ty);
 
-        for (const auto& [_, tp] : result->astResolvedTypePacks)
-            finder.traverse(tp);
+            for (const auto& [_, tp] : result->astResolvedTypePacks)
+                finder.traverse(tp);
+        }
+    }
+
+
+    unfreeze(result->interfaceTypes);
+    if (FFlag::LuauUseWorkspacePropToChooseSolver)
+        result->clonePublicInterface(builtinTypes, *iceHandler, SolverMode::New);
+    else
+        result->clonePublicInterface_DEPRECATED(builtinTypes, *iceHandler);
+
+    if (!FFlag::LuauLimitDynamicConstraintSolving)
+    {
+        if (FFlag::DebugLuauForbidInternalTypes)
+        {
+            InternalTypeFinder finder;
+
+            finder.traverse(result->returnType);
+
+            for (const auto& [_, binding] : result->exportedTypeBindings)
+                finder.traverse(binding.type);
+
+            for (const auto& [_, ty] : result->astTypes)
+                finder.traverse(ty);
+
+            for (const auto& [_, ty] : result->astExpectedTypes)
+                finder.traverse(ty);
+
+            for (const auto& [_, tp] : result->astTypePacks)
+                finder.traverse(tp);
+
+            for (const auto& [_, ty] : result->astResolvedTypes)
+                finder.traverse(ty);
+
+            for (const auto& [_, ty] : result->astOverloadResolvedTypes)
+                finder.traverse(ty);
+
+            for (const auto& [_, tp] : result->astResolvedTypePacks)
+                finder.traverse(tp);
+        }
     }
 
     // It would be nice if we could freeze the arenas before doing type
@@ -1683,7 +1754,7 @@ ModulePtr Frontend::check(
     TypeCheckLimits typeCheckLimits
 )
 {
-    if (FFlag::LuauSolverV2)
+    if (getLuauSolverMode() == SolverMode::New)
     {
         auto prepareModuleScopeWrap = [this, forAutocomplete](const ModuleName& name, const ScopePtr& scope)
         {
@@ -1705,7 +1776,7 @@ ModulePtr Frontend::check(
                 globals.globalTypeFunctionScope,
                 prepareModuleScopeWrap,
                 options,
-                typeCheckLimits,
+                std::move(typeCheckLimits),
                 recordJsonLog,
                 writeJsonLog
             );
@@ -1740,7 +1811,7 @@ ModulePtr Frontend::check(
         typeChecker.unifierIterationLimit = typeCheckLimits.unifierIterationLimit;
         typeChecker.cancellationToken = typeCheckLimits.cancellationToken;
 
-        return typeChecker.check(sourceModule, mode, environmentScope);
+        return typeChecker.check(sourceModule, mode, std::move(environmentScope));
     }
 }
 
@@ -2010,6 +2081,12 @@ void Frontend::clear()
     moduleResolver.clearModules();
     moduleResolverForAutocomplete.clearModules();
     requireTrace.clear();
+}
+
+void Frontend::clearBuiltinEnvironments()
+{
+    environments.clear();
+    builtinDefinitions.clear();
 }
 
 } // namespace Luau

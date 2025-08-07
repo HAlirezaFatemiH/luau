@@ -470,6 +470,40 @@ struct UnexpectedArrayLikeTableItem
     }
 };
 
+struct CannotCheckDynamicStringFormatCalls
+{
+    bool operator==(const CannotCheckDynamicStringFormatCalls&) const
+    {
+        return true;
+    }
+};
+
+// Error during subtyping when the number of generic types between compared types does not match
+struct GenericTypeCountMismatch
+{
+    size_t subTyGenericCount;
+    size_t superTyGenericCount;
+
+    bool operator==(const GenericTypeCountMismatch& rhs) const;
+};
+
+// Error during subtyping when the number of generic type packs between compared types does not match
+struct GenericTypePackCountMismatch
+{
+    size_t subTyGenericPackCount;
+    size_t superTyGenericPackCount;
+
+    bool operator==(const GenericTypePackCountMismatch& rhs) const;
+};
+
+// Error during subtyping when the number of generic type packs between compared types does not match
+struct MultipleNonviableOverloads
+{
+    size_t attemptedArgCount;
+
+    bool operator==(const MultipleNonviableOverloads& rhs) const;
+};
+
 using TypeErrorData = Variant<
     TypeMismatch,
     UnknownSymbol,
@@ -521,7 +555,11 @@ using TypeErrorData = Variant<
     ExplicitFunctionAnnotationRecommended,
     UserDefinedTypeFunctionError,
     ReservedIdentifier,
-    UnexpectedArrayLikeTableItem>;
+    UnexpectedArrayLikeTableItem,
+    CannotCheckDynamicStringFormatCalls,
+    GenericTypeCountMismatch,
+    GenericTypePackCountMismatch,
+    MultipleNonviableOverloads>;
 
 struct TypeErrorSummary
 {

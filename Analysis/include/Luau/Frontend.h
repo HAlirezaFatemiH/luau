@@ -9,7 +9,6 @@
 #include "Luau/Scope.h"
 #include "Luau/Set.h"
 #include "Luau/TypeCheckLimits.h"
-#include "Luau/Variant.h"
 
 #include <mutex>
 #include <string>
@@ -114,8 +113,11 @@ struct FrontendOptions
     bool applyInternalLimitScaling = false;
 
     // An optional callback which is called for every *dirty* module was checked
-    // Is multi-threaded typechecking is used, this callback might be called from multiple threads and has to be thread-safe
+    // If multi-threaded typechecking is used, this callback might be called
+    // from multiple threads and has to be thread-safe
     std::function<void(const SourceModule& sourceModule, const Luau::Module& module)> customModuleCheck;
+
+    bool collectTypeAllocationStats = false;
 };
 
 struct CheckResult
@@ -139,6 +141,7 @@ struct FrontendModuleResolver : ModuleResolver
     bool setModule(const ModuleName& moduleName, ModulePtr module);
     void clearModules();
 
+
 private:
     Frontend* frontend;
 
@@ -156,6 +159,13 @@ struct Frontend
         size_t filesStrict = 0;
         size_t filesNonstrict = 0;
 
+        size_t typesAllocated = 0;
+        size_t typePacksAllocated = 0;
+
+        size_t boolSingletonsMinted = 0;
+        size_t strSingletonsMinted = 0;
+        size_t uniqueStrSingletonsMinted = 0;
+
         double timeRead = 0;
         double timeParse = 0;
         double timeCheck = 0;
@@ -164,6 +174,10 @@ struct Frontend
 
     Frontend(FileResolver* fileResolver, ConfigResolver* configResolver, const FrontendOptions& options = {});
 
+    void setLuauSolverSelectionFromWorkspace(SolverMode mode);
+    SolverMode getLuauSolverMode() const;
+    // The default value assuming there is no workspace setup yet
+    std::atomic<SolverMode> useNewLuauSolver{FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old};
     // Parse module graph and prepare SourceNode/SourceModule data, including required dependencies without running typechecking
     void parse(const ModuleName& name);
     void parseModules(const std::vector<ModuleName>& name);
@@ -191,6 +205,7 @@ struct Frontend
 
     void clearStats();
     void clear();
+    void clearBuiltinEnvironments();
 
     ScopePtr addEnvironment(const std::string& environmentName);
     ScopePtr getEnvironmentScope(const std::string& environmentName) const;
@@ -258,7 +273,6 @@ private:
     static LintResult classifyLints(const std::vector<LintWarning>& warnings, const Config& config);
 
     ScopePtr getModuleEnvironment(const SourceModule& module, const Config& config, bool forAutocomplete) const;
-
     std::unordered_map<std::string, ScopePtr> environments;
     std::unordered_map<std::string, std::function<void(Frontend&, GlobalTypes&, ScopePtr)>> builtinDefinitions;
 

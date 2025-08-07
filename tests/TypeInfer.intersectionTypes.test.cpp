@@ -10,8 +10,11 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauNarrowIntersectionNevers)
-LUAU_FASTFLAG(LuauTableLiteralSubtypeSpecificCheck)
+LUAU_FASTFLAG(LuauTableLiteralSubtypeSpecificCheck2)
+LUAU_FASTFLAG(LuauRefineTablesWithReadType)
+LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
+LUAU_FASTFLAG(LuauPushFunctionTypesInFunctionStatement)
+LUAU_FASTFLAG(LuauTableLiteralSubtypeSpecificCheck2)
 
 TEST_SUITE_BEGIN("IntersectionTypes");
 
@@ -334,6 +337,11 @@ TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed")
 
 TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed_indirect")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauPushFunctionTypesInFunctionStatement, true},
+        {FFlag::LuauTableLiteralSubtypeSpecificCheck2, true},
+    };
+
     CheckResult result = check(R"(
         type X = { x: (number) -> number }
         type Y = { y: (string) -> string }
@@ -349,9 +357,14 @@ TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed_indirect")
 
     if (FFlag::LuauSolverV2)
     {
-        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        LUAU_REQUIRE_ERROR_COUNT(3, result);
         CHECK_EQ(toString(result.errors[0]), "Cannot add property 'z' to table 'X & Y'");
-        CHECK_EQ(toString(result.errors[1]), "Cannot add property 'w' to table 'X & Y'");
+        // I'm not writing this as a `toString` check, those are awful.
+        auto err1 = get<TypeMismatch>(result.errors[1]);
+        REQUIRE(err1);
+        CHECK_EQ("number", toString(err1->givenType));
+        CHECK_EQ("string", toString(err1->wantedType));
+        CHECK_EQ(toString(result.errors[2]), "Cannot add property 'w' to table 'X & Y'");
     }
     else
     {
@@ -450,7 +463,7 @@ Type 'number' could not be converted into 'X')";
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_intersection_all")
 {
-    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck, true};
+    ScopedFastFlag _{FFlag::LuauTableLiteralSubtypeSpecificCheck2, true};
 
     CheckResult result = check(R"(
 type X = { x: number }
@@ -1149,6 +1162,8 @@ could not be converted into
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
 {
+    ScopedFastFlag _{FFlag::LuauReturnMappedGenericPacksFromSubtyping2, true};
+
     CheckResult result = check(R"(
         function f<a...>()
             function g(x : ((a...) -> ()) & ((number,a...) -> number))
@@ -1162,15 +1177,17 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
 
     if (FFlag::LuauSolverV2)
     {
-        const std::string expected = "Type\n\t"
-                                     "'((a...) -> ()) & ((number, a...) -> number)'"
-                                     "\ncould not be converted into\n\t"
-                                     "'((a...) -> ()) & ((number, a...) -> number)'; \n"
-                                     "this is because \n\t"
-                                     " * in the 1st component of the intersection, the function returns is `()` in the former type and `number` in "
-                                     "the latter type, and `()` is not a subtype of `number`\n\t"
-                                     " * in the 2nd component of the intersection, the function takes a tail of `a...` and in the 1st component of "
-                                     "the intersection, the function takes a tail of `a...`, and `a...` is not a supertype of `a...`";
+        // TODO: CLI-159120 - this error message is bogus
+        const std::string expected =
+            "Type\n\t"
+            "'((a...) -> ()) & ((number, a...) -> number)'"
+            "\ncould not be converted into\n\t"
+            "'((a...) -> ()) & ((number, a...) -> number)'; \n"
+            "this is because \n\t"
+            " * in the 1st component of the intersection, the function returns is `()` in the former type and `number` in "
+            "the latter type, and `()` is not a subtype of `number`\n\t"
+            " * in the 2nd component of the intersection, the function takes a tail of `number, a...` and in the 1st component of "
+            "the intersection, the function takes a tail of `number, a...`, and `number, a...` is not a supertype of `number, a...`";
         CHECK(expected == toString(result.errors[0]));
     }
     else
@@ -1458,8 +1475,10 @@ TEST_CASE_FIXTURE(Fixture, "cli_80596_simplify_more_realistic_intersections")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "narrow_intersection_nevers")
 {
-    ScopedFastFlag newSolver{FFlag::LuauSolverV2, true};
-    ScopedFastFlag narrowIntersections{FFlag::LuauNarrowIntersectionNevers, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauRefineTablesWithReadType, true},
+    };
 
     loadDefinition(R"(
         declare class Player
@@ -1474,7 +1493,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "narrow_intersection_nevers")
         end
     )"));
 
-    CHECK_EQ("Player & { Character: ~(false?) }", toString(requireTypeAtPosition({3, 23})));
+    CHECK_EQ("Player & { read Character: ~(false?) }", toString(requireTypeAtPosition({3, 23})));
 }
 
 TEST_SUITE_END();

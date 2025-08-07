@@ -143,8 +143,8 @@ struct ConstraintGenerator
         NotNull<ModuleResolver> moduleResolver,
         NotNull<BuiltinTypes> builtinTypes,
         NotNull<InternalErrorReporter> ice,
-        const ScopePtr& globalScope,
-        const ScopePtr& typeFunctionScope,
+        ScopePtr globalScope,
+        ScopePtr typeFunctionScope,
         std::function<void(const ModuleName&, const ScopePtr&)> prepareModuleScope,
         DcrLogger* logger,
         NotNull<DataFlowGraph> dfg,
@@ -494,6 +494,9 @@ private:
     );
 
     TypeId simplifyUnion(const ScopePtr& scope, Location location, TypeId left, TypeId right);
+
+    void updateRValueRefinements(const ScopePtr& scope, DefId def, TypeId ty) const;
+    void updateRValueRefinements(Scope* scope, DefId def, TypeId ty) const;
 };
 
 } // namespace Luau
