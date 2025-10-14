@@ -11,10 +11,15 @@ using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauTableCloneClonesType3)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAG(LuauNoScopeShallNotSubsumeAll)
-LUAU_FASTFLAG(LuauTableLiteralSubtypeCheckFunctionCalls)
-LUAU_FASTFLAG(LuauSuppressErrorsForMultipleNonviableOverloads)
+LUAU_FASTFLAG(LuauSubtypingPrimitiveAndGenericTableTypes)
+LUAU_FASTFLAG(LuauUnifyShortcircuitSomeIntersectionsAndUnions)
+LUAU_FASTFLAG(LuauFilterOverloadsByArity)
+LUAU_FASTFLAG(LuauSubtypingReportGenericBoundMismatches2)
+LUAU_FASTFLAG(LuauSubtypingGenericsDoesntUseVariance)
+LUAU_FASTFLAG(LuauVectorLerp)
+LUAU_FASTFLAG(LuauCompileVectorLerp)
+LUAU_FASTFLAG(LuauTypeCheckerVectorLerp2)
 
 TEST_SUITE_BEGIN("BuiltinTests");
 
@@ -385,8 +390,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "setmetatable_on_union_of_tables")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-
-    CHECK("{ @metatable {  }, A } | { @metatable {  }, B }" == toString(requireTypeAlias("X")));
+    if (FFlag::LuauSolverV2)
+        CHECK("{ @metatable {  }, A } | { @metatable {  }, B }" == toString(requireTypeAlias("X")));
+    else
+        CHECK("{ @metatable {|  |}, A } | { @metatable {|  |}, B }" == toString(requireTypeAlias("X")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_correctly_infers_type_of_array_2_args_overload")
@@ -420,10 +427,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_pack")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("{ [number]: boolean | number | string, n: number }", toString(requireType("t")));
-    else
-        CHECK_EQ("{| [number]: boolean | number | string, n: number |}", toString(requireType("t")));
+    CHECK_EQ("{ [number]: boolean | number | string, n: number }", toString(requireType("t")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_pack_variadic")
@@ -438,10 +442,7 @@ local t = table.pack(f())
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("{ [number]: number | string, n: number }", toString(requireType("t")));
-    else
-        CHECK_EQ("{| [number]: number | string, n: number |}", toString(requireType("t")));
+    CHECK_EQ("{ [number]: number | string, n: number }", toString(requireType("t")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_pack_reduce")
@@ -451,20 +452,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_pack_reduce")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("{ [number]: boolean | number, n: number }", toString(requireType("t")));
-    else
-        CHECK_EQ("{| [number]: boolean | number, n: number |}", toString(requireType("t")));
+    CHECK_EQ("{ [number]: boolean | number, n: number }", toString(requireType("t")));
 
     result = check(R"(
         local t = table.pack("a", "b", "c")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("{ [number]: string, n: number }", toString(requireType("t")));
-    else
-        CHECK_EQ("{| [number]: string, n: number |}", toString(requireType("t")));
+    CHECK_EQ("{ [number]: string, n: number }", toString(requireType("t")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "gcinfo")
@@ -1137,7 +1132,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_freeze_is_generic")
     if (FFlag::LuauSolverV2)
         CHECK("Key 'b' not found in table '{ read a: number }'" == toString(result.errors[0]));
     else
-        CHECK_EQ("Key 'b' not found in table '{| a: number |}'", toString(result.errors[0]));
+        CHECK_EQ("Key 'b' not found in table '{ a: number }'", toString(result.errors[0]));
     CHECK(Location({13, 18}, {13, 23}) == result.errors[0].location);
 
     if (FFlag::LuauSolverV2)
@@ -1593,6 +1588,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "string_find_should_not_crash")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_dot_clone_type_states")
 {
+    ScopedFastFlag sff{FFlag::LuauTableCloneClonesType3, true};
     CheckResult result = check(R"(
         local t1 = {}
         t1.x = 5
@@ -1603,15 +1599,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_dot_clone_type_states")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauTableCloneClonesType3)
+    if (FFlag::LuauSolverV2)
     {
         CHECK_EQ(toString(requireType("t1"), {true}), "{ x: number, z: number }");
         CHECK_EQ(toString(requireType("t2"), {true}), "{ x: number, y: number }");
     }
     else
     {
-        CHECK_EQ(toString(requireType("t1"), {true}), "{ x: number, y: number, z: number }");
-        CHECK_EQ(toString(requireType("t2"), {true}), "{ x: number, y: number, z: number }");
+        CHECK_EQ(toString(requireType("t1"), {true}), "{| x: number, z: number |}");
+        CHECK_EQ(toString(requireType("t2"), {true}), "{| x: number, y: number |}");
     }
 }
 
@@ -1713,10 +1709,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "better_string_format_error_when_format_strin
 
 TEST_CASE_FIXTURE(Fixture, "write_only_table_assertion")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauSolverV2, true},
-        {FFlag::LuauTableLiteralSubtypeCheckFunctionCalls, true},
-    };
+    ScopedFastFlag sff{FFlag::LuauSolverV2, true};
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
         local function accept(t: { write foo: number })
@@ -1728,8 +1721,6 @@ TEST_CASE_FIXTURE(Fixture, "write_only_table_assertion")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_into_any")
 {
-    ScopedFastFlag _{FFlag::LuauSuppressErrorsForMultipleNonviableOverloads, true};
-
     LUAU_REQUIRE_NO_ERRORS(check(R"(
 table.insert(1::any, 2::any)
     )"));
@@ -1737,7 +1728,12 @@ table.insert(1::any, 2::any)
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_requires_all_fields")
 {
-    ScopedFastFlag _{FFlag::LuauNoScopeShallNotSubsumeAll, true};
+    ScopedFastFlag _[] = {
+        {FFlag::LuauNoScopeShallNotSubsumeAll, true},
+        {FFlag::LuauFilterOverloadsByArity, true},
+        {FFlag::LuauSubtypingReportGenericBoundMismatches2, true},
+        {FFlag::LuauSubtypingGenericsDoesntUseVariance, true}
+    };
 
     CheckResult result = check(R"(
         local function huh(): { { x: number, y: string } }
@@ -1786,6 +1782,67 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "read_refinements_on_persistent_tables_known_
         end
     )"));
     CHECK_EQ("\"lol\"", toString(requireTypeAtPosition(Position{4, 23})));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "next_with_refined_any")
+{
+    ScopedFastFlag lsv2{FFlag::LuauSolverV2, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauSubtypingPrimitiveAndGenericTableTypes, true}, {FFlag::LuauUnifyShortcircuitSomeIntersectionsAndUnions, true}
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local t: any = {"hello", "world"}
+        if type(t) == "table" and next(t) then
+	        local foo, bar = next(t)
+            local _ = foo
+            local _ = bar
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ(toString(requireTypeAtPosition(Position{5, 23})), "unknown?");
+    CHECK_EQ(toString(requireTypeAtPosition(Position{6, 23})), "unknown");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "pairs_with_refined_any")
+{
+    ScopedFastFlag lsv2{FFlag::LuauSolverV2, true};
+    ScopedFastFlag sff{FFlag::LuauSubtypingPrimitiveAndGenericTableTypes, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local t: any = {"hello", "world"}
+        if type(t) == "table" and pairs(t) then
+	        local foo, bar, lorem = pairs(t)
+            local _ = foo
+            local _ = bar
+            local _ = lorem
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ(toString(requireTypeAtPosition(Position{5, 23})), "({+ [unknown]: unknown +}, unknown?) -> (unknown?, unknown)");
+    CHECK_EQ(toString(requireTypeAtPosition(Position{6, 23})), "{+ [unknown]: unknown +}");
+    CHECK_EQ(toString(requireTypeAtPosition(Position{7, 23})), "nil");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "vector_lerp_should_not_crash")
+{
+    ScopedFastFlag _[]{
+        {FFlag::LuauCompileVectorLerp, true},
+        {FFlag::LuauTypeCheckerVectorLerp2, true},
+        {FFlag::LuauVectorLerp, true},
+    };
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        local function half(x: number, y: number, z: number): vector
+            return vector.lerp(vector.zero, vector.create(x, y, z), 0.5)
+        end
+    )"));
 }
 
 TEST_SUITE_END();

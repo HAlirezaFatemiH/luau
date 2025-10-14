@@ -258,18 +258,6 @@ std::optional<Ty> follow(std::optional<Ty> ty)
 bool isLiteral(const AstExpr* expr);
 
 /**
- * Given a table literal and a mapping from expression to type, determine
- * whether any literal expression in this table depends on any blocked types.
- * This is used as a precondition for bidirectional inference: be warned that
- * the behavior of this algorithm is tightly coupled to that of bidirectional
- * inference.
- * @param expr Expression to search
- * @param astTypes Mapping from AST node to TypeID
- * @returns A vector of blocked types
- */
-std::vector<TypeId> findBlockedTypesIn(AstExprTable* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes);
-
-/**
  * Given a function call and a mapping from expression to type, determine
  * whether the type of any argument in said call in depends on a blocked types.
  * This is used as a precondition for bidirectional inference: be warned that
@@ -347,6 +335,9 @@ bool isApproximatelyTruthyType(TypeId ty);
 
 // Unwraps any grouping expressions iteratively.
 AstExpr* unwrapGroup(AstExpr* expr);
+
+// Returns true if ty is optional, ie if it is a supertype of nil
+bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes);
 
 // These are magic types used in `TypeChecker2` and `NonStrictTypeChecker`
 //

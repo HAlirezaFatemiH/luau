@@ -195,6 +195,7 @@ public:
         Checked,
         Native,
         Deprecated,
+        Unknown
     };
 
     struct DeprecatedInfo
@@ -205,6 +206,7 @@ public:
     };
 
     AstAttr(const Location& location, Type type, AstArray<AstExpr*> args);
+    AstAttr(const Location& location, Type type, AstArray<AstExpr*> args, AstName name);
 
     AstAttr* asAttr() override
     {
@@ -217,6 +219,7 @@ public:
 
     Type type;
     AstArray<AstExpr*> args;
+    AstName name;
 };
 
 class AstExpr : public AstNode
@@ -339,9 +342,28 @@ public:
 
     enum QuoteStyle
     {
+        // A string created using double quotes or an interpolated string,
+        // as in:
+        //
+        //  "foo", `My name is {protagonist}! / And I'm {antagonist}!`
+        //
         QuotedSimple,
+        // A string created using single quotes, as in:
+        //
+        //  'bar'
+        //
+        QuotedSingle,
+        // A string created using `[[ ... ]]` as in:
+        //
+        //   [[ Gee, this sure is a long string.
+        //   it even has a new line in it! ]]
+        //
         QuotedRaw,
-        Unquoted
+        // A "string" in the context of a table literal, as in:
+        //
+        //  { foo = 42 } -- `foo` here is a "constant string"
+        //
+        Unquoted,
     };
 
     AstExprConstantString(const Location& location, const AstArray<char>& value, QuoteStyle quoteStyle);

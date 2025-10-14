@@ -21,6 +21,8 @@ LUAU_FASTFLAGVARIABLE(LuauSolverV2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(DebugLuauReportReturnTypeVariadicWithTypeSuffix, false)
 LUAU_FASTFLAGVARIABLE(LuauParseIncompleteInterpStringsWithLocation)
 LUAU_FASTFLAGVARIABLE(LuauParametrizedAttributeSyntax)
+LUAU_FASTFLAGVARIABLE(DebugLuauStringSingletonBasedOnQuotes)
+LUAU_FASTFLAGVARIABLE(LuauAutocompleteAttributes)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
 bool luau_telemetry_parsed_return_type_variadic_with_type_suffix = false;
@@ -933,8 +935,15 @@ void Parser::parseAttribute(TempVector<AstAttr*>& attributes)
 
         nextLexeme();
 
-        if (type)
-            attributes.push_back(allocator.alloc<AstAttr>(loc, *type, empty));
+        if (FFlag::LuauAutocompleteAttributes)
+        {
+            attributes.push_back(allocator.alloc<AstAttr>(loc, type.value_or(AstAttr::Type::Unknown), empty, AstName(name)));
+        }
+        else
+        {
+            if (type)
+                attributes.push_back(allocator.alloc<AstAttr>(loc, *type, empty));
+        }
     }
     else
     {
@@ -964,14 +973,30 @@ void Parser::parseAttribute(TempVector<AstAttr*>& attributes)
 
                     std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args);
 
-                    if (type)
-                        attributes.push_back(allocator.alloc<AstAttr>(Location(nameLoc, argsLocation), *type, args));
+                    if (FFlag::LuauAutocompleteAttributes)
+                    {
+                        attributes.push_back(
+                            allocator.alloc<AstAttr>(Location(nameLoc, argsLocation), type.value_or(AstAttr::Type::Unknown), args, AstName(attrName))
+                        );
+                    }
+                    else
+                    {
+                        if (type)
+                            attributes.push_back(allocator.alloc<AstAttr>(Location(nameLoc, argsLocation), *type, args));
+                    }
                 }
                 else
                 {
                     std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, empty);
-                    if (type)
-                        attributes.push_back(allocator.alloc<AstAttr>(nameLoc, *type, empty));
+                    if (FFlag::LuauAutocompleteAttributes)
+                    {
+                        attributes.push_back(allocator.alloc<AstAttr>(nameLoc, type.value_or(AstAttr::Type::Unknown), empty, AstName(attrName)));
+                    }
+                    else
+                    {
+                        if (type)
+                            attributes.push_back(allocator.alloc<AstAttr>(nameLoc, *type, empty));
+                    }
                 }
 
                 if (lexer.current().type == ',')
@@ -987,6 +1012,14 @@ void Parser::parseAttribute(TempVector<AstAttr*>& attributes)
         else
         {
             report(Location(open.location, lexer.current().location), "Attribute list cannot be empty");
+
+            if (FFlag::LuauAutocompleteAttributes)
+            {
+                // autocomplete expects at least one unknown attribute.
+                attributes.push_back(
+                    allocator.alloc<AstAttr>(Location(open.location, lexer.current().location), AstAttr::Type::Unknown, empty, nameError)
+                );
+            }
         }
 
         expectMatchAndConsume(']', open);
@@ -1451,9 +1484,11 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
                     if (chars && !containsNull)
                     {
-                        props.push_back(AstDeclaredExternTypeProperty{
-                            AstName(chars->data), Location(nameBegin, nameEnd), type, false, Location(begin.location, lexer.previousLocation())
-                        });
+                        props.push_back(
+                            AstDeclaredExternTypeProperty{
+                                AstName(chars->data), Location(nameBegin, nameEnd), type, false, Location(begin.location, lexer.previousLocation())
+                            }
+                        );
                     }
                     else
                     {
@@ -1484,9 +1519,9 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
                 expectAndConsume(':', "property type annotation");
                 AstType* propType = parseType();
-                props.push_back(AstDeclaredExternTypeProperty{
-                    propName->name, propName->location, propType, false, Location(propStart, lexer.previousLocation())
-                });
+                props.push_back(
+                    AstDeclaredExternTypeProperty{propName->name, propName->location, propType, false, Location(propStart, lexer.previousLocation())}
+                );
             }
         }
 
@@ -2117,16 +2152,18 @@ AstType* Parser::parseTableType(bool inDeclarationContext)
                 {
                     props.push_back(AstTableProp{AstName(chars->data), begin.location, type, access, accessLocation});
                     if (options.storeCstData)
-                        cstItems.push_back(CstTypeTable::Item{
-                            CstTypeTable::Item::Kind::StringProperty,
-                            begin.location.begin,
-                            indexerClosePosition,
-                            colonPosition,
-                            tableSeparator(),
-                            lexer.current().location.begin,
-                            allocator.alloc<CstExprConstantString>(sourceString, style, blockDepth),
-                            stringPosition
-                        });
+                        cstItems.push_back(
+                            CstTypeTable::Item{
+                                CstTypeTable::Item::Kind::StringProperty,
+                                begin.location.begin,
+                                indexerClosePosition,
+                                colonPosition,
+                                tableSeparator(),
+                                lexer.current().location.begin,
+                                allocator.alloc<CstExprConstantString>(sourceString, style, blockDepth),
+                                stringPosition
+                            }
+                        );
                 }
                 else
                     report(begin.location, "String literal contains malformed escape sequence or \\0");
@@ -2147,14 +2184,16 @@ AstType* Parser::parseTableType(bool inDeclarationContext)
                     auto tableIndexerResult = parseTableIndexer(access, accessLocation, begin);
                     indexer = tableIndexerResult.node;
                     if (options.storeCstData)
-                        cstItems.push_back(CstTypeTable::Item{
-                            CstTypeTable::Item::Kind::Indexer,
-                            tableIndexerResult.indexerOpenPosition,
-                            tableIndexerResult.indexerClosePosition,
-                            tableIndexerResult.colonPosition,
-                            tableSeparator(),
-                            lexer.current().location.begin,
-                        });
+                        cstItems.push_back(
+                            CstTypeTable::Item{
+                                CstTypeTable::Item::Kind::Indexer,
+                                tableIndexerResult.indexerOpenPosition,
+                                tableIndexerResult.indexerClosePosition,
+                                tableIndexerResult.colonPosition,
+                                tableSeparator(),
+                                lexer.current().location.begin,
+                            }
+                        );
                 }
             }
         }
@@ -2183,14 +2222,16 @@ AstType* Parser::parseTableType(bool inDeclarationContext)
 
             props.push_back(AstTableProp{name->name, name->location, type, access, accessLocation});
             if (options.storeCstData)
-                cstItems.push_back(CstTypeTable::Item{
-                    CstTypeTable::Item::Kind::Property,
-                    Position{0, 0},
-                    Position{0, 0},
-                    colonPosition,
-                    tableSeparator(),
-                    lexer.current().location.begin
-                });
+                cstItems.push_back(
+                    CstTypeTable::Item{
+                        CstTypeTable::Item::Kind::Property,
+                        Position{0, 0},
+                        Position{0, 0},
+                        colonPosition,
+                        tableSeparator(),
+                        lexer.current().location.begin
+                    }
+                );
         }
 
         if (lexer.current().type == ',' || lexer.current().type == ';')
@@ -3847,17 +3888,38 @@ AstExpr* Parser::parseString()
     Location location = lexer.current().location;
 
     AstExprConstantString::QuoteStyle style;
-    switch (lexer.current().type)
+    if (FFlag::DebugLuauStringSingletonBasedOnQuotes)
     {
-    case Lexeme::QuotedString:
-    case Lexeme::InterpStringSimple:
-        style = AstExprConstantString::QuotedSimple;
-        break;
-    case Lexeme::RawString:
-        style = AstExprConstantString::QuotedRaw;
-        break;
-    default:
-        LUAU_ASSERT(false && "Invalid string type");
+        switch (lexer.current().type)
+        {
+        case Lexeme::InterpStringSimple:
+            style = AstExprConstantString::QuotedSimple;
+            break;
+        case Lexeme::RawString:
+            style = AstExprConstantString::QuotedRaw;
+            break;
+        case Lexeme::QuotedString:
+            style = lexer.current().getQuoteStyle() == Lexeme::QuoteStyle::Single ? AstExprConstantString::QuotedSingle
+                                                                                  : AstExprConstantString::QuotedSimple;
+            break;
+        default:
+            LUAU_ASSERT(false && "Invalid string type");
+        }
+    }
+    else
+    {
+        switch (lexer.current().type)
+        {
+        case Lexeme::QuotedString:
+        case Lexeme::InterpStringSimple:
+            style = AstExprConstantString::QuotedSimple;
+            break;
+        case Lexeme::RawString:
+            style = AstExprConstantString::QuotedRaw;
+            break;
+        default:
+            LUAU_ASSERT(false && "Invalid string type");
+        }
     }
 
     CstExprConstantString::QuoteStyle fullStyle;
@@ -4069,28 +4131,29 @@ bool Parser::expectAndConsume(char value, const char* context)
 bool Parser::expectAndConsume(Lexeme::Type type, const char* context)
 {
     if (lexer.current().type != type)
-    {
-        expectAndConsumeFail(type, context);
+        return expectAndConsumeFailWithLookahead(type, context);
 
-        // check if this is an extra token and the expected token is next
-        if (lexer.lookahead().type == type)
-        {
-            // skip invalid and consume expected
-            nextLexeme();
-            nextLexeme();
-        }
-
-        return false;
-    }
-    else
-    {
-        nextLexeme();
-        return true;
-    }
+    nextLexeme();
+    return true;
 }
 
-// LUAU_NOINLINE is used to limit the stack cost of this function due to std::string objects, and to increase caller performance since this code is
-// cold
+// LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold
+LUAU_NOINLINE bool Parser::expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context)
+{
+    expectAndConsumeFail(type, context);
+
+    // check if this is an extra token and the expected token is next
+    if (lexer.lookahead().type == type)
+    {
+        // skip invalid and consume expected
+        nextLexeme();
+        nextLexeme();
+    }
+
+    return false;
+}
+
+// LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold
 LUAU_NOINLINE void Parser::expectAndConsumeFail(Lexeme::Type type, const char* context)
 {
     std::string typeString = Lexeme(Location(Position(0, 0), 0), type).toString();
@@ -4120,6 +4183,7 @@ bool Parser::expectMatchAndConsume(char value, const MatchLexeme& begin, bool se
     }
 }
 
+// LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold
 LUAU_NOINLINE bool Parser::expectMatchAndConsumeRecover(char value, const MatchLexeme& begin, bool searchForMissing)
 {
     Lexeme::Type type = static_cast<Lexeme::Type>(static_cast<unsigned char>(value));
@@ -4162,8 +4226,7 @@ LUAU_NOINLINE bool Parser::expectMatchAndConsumeRecover(char value, const MatchL
     return false;
 }
 
-// LUAU_NOINLINE is used to limit the stack cost of this function due to std::string objects, and to increase caller performance since this code is
-// cold
+// LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold
 LUAU_NOINLINE void Parser::expectMatchAndConsumeFail(Lexeme::Type type, const MatchLexeme& begin, const char* extra)
 {
     std::string typeString = Lexeme(Location(Position(0, 0), 0), type).toString();
@@ -4194,40 +4257,23 @@ LUAU_NOINLINE void Parser::expectMatchAndConsumeFail(Lexeme::Type type, const Ma
 bool Parser::expectMatchEndAndConsume(Lexeme::Type type, const MatchLexeme& begin)
 {
     if (lexer.current().type != type)
+        return expectMatchEndAndConsumeFailWithLookahead(type, begin);
+
+    // If the token matches on a different line and a different column, it suggests misleading indentation
+    // This can be used to pinpoint the problem location for a possible future *actual* mismatch
+    if (lexer.current().location.begin.line != begin.position.line && lexer.current().location.begin.column != begin.position.column &&
+        endMismatchSuspect.position.line < begin.position.line) // Only replace the previous suspect with more recent suspects
     {
-        expectMatchEndAndConsumeFail(type, begin);
-
-        // check if this is an extra token and the expected token is next
-        if (lexer.lookahead().type == type)
-        {
-            // skip invalid and consume expected
-            nextLexeme();
-            nextLexeme();
-
-            return true;
-        }
-
-        return false;
+        endMismatchSuspect = begin;
     }
-    else
-    {
-        // If the token matches on a different line and a different column, it suggests misleading indentation
-        // This can be used to pinpoint the problem location for a possible future *actual* mismatch
-        if (lexer.current().location.begin.line != begin.position.line && lexer.current().location.begin.column != begin.position.column &&
-            endMismatchSuspect.position.line < begin.position.line) // Only replace the previous suspect with more recent suspects
-        {
-            endMismatchSuspect = begin;
-        }
 
-        nextLexeme();
+    nextLexeme();
 
-        return true;
-    }
+    return true;
 }
 
-// LUAU_NOINLINE is used to limit the stack cost of this function due to std::string objects, and to increase caller performance since this code is
-// cold
-LUAU_NOINLINE void Parser::expectMatchEndAndConsumeFail(Lexeme::Type type, const MatchLexeme& begin)
+// LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold
+LUAU_NOINLINE bool Parser::expectMatchEndAndConsumeFailWithLookahead(Lexeme::Type type, const MatchLexeme& begin)
 {
     if (endMismatchSuspect.type != Lexeme::Eof && endMismatchSuspect.position.line > begin.position.line)
     {
@@ -4240,6 +4286,18 @@ LUAU_NOINLINE void Parser::expectMatchEndAndConsumeFail(Lexeme::Type type, const
     {
         expectMatchAndConsumeFail(type, begin);
     }
+
+    // check if this is an extra token and the expected token is next
+    if (lexer.lookahead().type == type)
+    {
+        // skip invalid and consume expected
+        nextLexeme();
+        nextLexeme();
+
+        return true;
+    }
+
+    return false;
 }
 
 template<typename T>

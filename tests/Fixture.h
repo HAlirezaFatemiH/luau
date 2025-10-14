@@ -29,7 +29,6 @@
 LUAU_FASTFLAG(DebugLuauFreezeArena)
 LUAU_FASTFLAG(DebugLuauForceAllNewSolverTests)
 
-LUAU_FASTFLAG(LuauUpdateSetMetatableTypeSignature)
 LUAU_FASTFLAG(LuauTidyTypeUtils)
 LUAU_FASTFLAG(DebugLuauAlwaysShowConstraintSolvingIncomplete);
 
@@ -153,7 +152,6 @@ struct Fixture
     // Most often those are changes related to builtin type definitions.
     // In that case, flag can be forced to 'true' using the example below:
     // ScopedFastFlag sff_LuauExampleFlagDefinition{FFlag::LuauExampleFlagDefinition, true};
-    ScopedFastFlag sff_LuauUpdateSetMetatableTypeSignature{FFlag::LuauUpdateSetMetatableTypeSignature, true};
 
     ScopedFastFlag sff_TypeUtilTidy{FFlag::LuauTidyTypeUtils, true};
 
@@ -188,6 +186,7 @@ struct Fixture
     LoadDefinitionFileResult loadDefinition(const std::string& source, bool forAutocomplete = false);
     // TODO: test theory about dynamic dispatch
     NotNull<BuiltinTypes> getBuiltins();
+    const BuiltinTypeFunctions& getBuiltinTypeFunctions();
     virtual Frontend& getFrontend();
 
 private:

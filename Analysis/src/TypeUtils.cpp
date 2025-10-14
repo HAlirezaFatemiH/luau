@@ -8,13 +8,16 @@
 #include "Luau/ToString.h"
 #include "Luau/Type.h"
 #include "Luau/TypeInfer.h"
+#include "Luau/TypePack.h"
 
 #include <algorithm>
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAGVARIABLE(LuauTidyTypeUtils)
 LUAU_FASTFLAG(LuauEmplaceNotPushBack)
+LUAU_FASTFLAGVARIABLE(LuauVariadicAnyPackShouldBeErrorSuppressing)
+LUAU_FASTFLAG(LuauPushTypeConstraint2)
+LUAU_FASTFLAG(LuauFilterOverloadsByArity)
 
 namespace Luau
 {
@@ -502,6 +505,17 @@ ErrorSuppression shouldSuppressErrors(NotNull<Normalizer> normalizer, TypeId ty)
 
 ErrorSuppression shouldSuppressErrors(NotNull<Normalizer> normalizer, TypePackId tp)
 {
+    // Flatten t where t = ...any will produce a type pack [ {}, t]
+    // which trivially fails the tail check below, which is why we need to special case here
+    if (FFlag::LuauVariadicAnyPackShouldBeErrorSuppressing)
+    {
+        if (auto tpId = get<VariadicTypePack>(follow(tp)))
+        {
+            if (get<AnyType>(follow(tpId->ty)))
+                return ErrorSuppression::Suppress;
+        }
+    }
+
     auto [tys, tail] = flatten(tp);
 
     // check the head, one type at a time
@@ -585,14 +599,6 @@ private:
     NotNull<std::vector<TypeId>> toBlock_;
 };
 
-std::vector<TypeId> findBlockedTypesIn(AstExprTable* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes)
-{
-    std::vector<TypeId> toBlock;
-    BlockedTypeInLiteralVisitor v{astTypes, NotNull{&toBlock}};
-    expr->visit(&v);
-    return toBlock;
-}
-
 std::vector<TypeId> findBlockedArgTypesIn(AstExprCall* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes)
 {
     std::vector<TypeId> toBlock;
@@ -626,8 +632,6 @@ void trackInteriorFreeType(Scope* scope, TypeId ty)
 void trackInteriorFreeTypePack(Scope* scope, TypePackId tp)
 {
     LUAU_ASSERT(tp);
-    if (!FFlag::LuauEagerGeneralization4)
-        return;
 
     for (; scope; scope = scope->parent.get())
     {
@@ -710,6 +714,9 @@ std::optional<TypeId> extractMatchingTableType(std::vector<TypeId>& tables, Type
                         return ty;
                     }
                 }
+
+                if (FFlag::LuauPushTypeConstraint2 && fastIsSubtype(propType, expectedType))
+                    return ty;
             }
         }
     }
@@ -739,6 +746,34 @@ AstExpr* unwrapGroup(AstExpr* expr)
         expr = group->expr;
 
     return expr;
+}
+
+bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
+{
+    LUAU_ASSERT(FFlag::LuauFilterOverloadsByArity);
+
+    ty = follow(ty);
+
+    if (ty == builtinTypes->nilType || ty == builtinTypes->anyType || ty == builtinTypes->unknownType)
+        return true;
+    else if (const PrimitiveType* pt = get<PrimitiveType>(ty))
+        return pt->type == PrimitiveType::NilType;
+    else if (const UnionType* ut = get<UnionType>(ty))
+    {
+        for (TypeId option : ut)
+        {
+            option = follow(option);
+
+            if (option == builtinTypes->nilType || option == builtinTypes->anyType || option == builtinTypes->unknownType)
+                return true;
+            else if (const PrimitiveType* pt = get<PrimitiveType>(option); pt && pt->type == PrimitiveType::NilType)
+                return true;
+        }
+
+        return false;
+    }
+
+    return false;
 }
 
 bool isApproximatelyFalsyType(TypeId ty)

@@ -16,6 +16,8 @@
 #include <limits.h>
 #include <math.h>
 
+LUAU_FASTFLAG(LuauCodegenDirectCompare2)
+
 namespace Luau
 {
 namespace CodeGen
@@ -182,17 +184,23 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::ABS_NUM:
     case IrCmd::SIGN_NUM:
     case IrCmd::SELECT_NUM:
+    case IrCmd::MULADD_NUM:
         return IrValueKind::Double;
     case IrCmd::ADD_VEC:
     case IrCmd::SUB_VEC:
     case IrCmd::MUL_VEC:
     case IrCmd::DIV_VEC:
     case IrCmd::UNM_VEC:
+    case IrCmd::SELECT_VEC:
+    case IrCmd::MULADD_VEC:
         return IrValueKind::Tvalue;
     case IrCmd::DOT_VEC:
         return IrValueKind::Double;
     case IrCmd::NOT_ANY:
     case IrCmd::CMP_ANY:
+    case IrCmd::CMP_INT:
+    case IrCmd::CMP_TAG:
+    case IrCmd::CMP_SPLIT_TVALUE:
         return IrValueKind::Int;
     case IrCmd::JUMP:
     case IrCmd::JUMP_IF_TRUTHY:
@@ -239,7 +247,6 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::DO_LEN:
     case IrCmd::GET_TABLE:
     case IrCmd::SET_TABLE:
-    case IrCmd::GET_IMPORT:
     case IrCmd::GET_CACHED_IMPORT:
     case IrCmd::CONCAT:
     case IrCmd::GET_UPVALUE:
@@ -789,6 +796,93 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
             else if (inst.b.kind == IrOpKind::Constant)
                 substitute(function, inst, build.constInt(function.intOp(inst.b) == 1 ? 0 : 1));
         }
+        break;
+    case IrCmd::CMP_INT:
+        if (inst.a.kind == IrOpKind::Constant && inst.b.kind == IrOpKind::Constant)
+        {
+            if (compare(function.intOp(inst.a), function.intOp(inst.b), conditionOp(inst.c)))
+                substitute(function, inst, build.constInt(1));
+            else
+                substitute(function, inst, build.constInt(0));
+        }
+        break;
+    case IrCmd::CMP_TAG:
+        CODEGEN_ASSERT(FFlag::LuauCodegenDirectCompare2);
+
+        if (inst.a.kind == IrOpKind::Constant && inst.b.kind == IrOpKind::Constant)
+        {
+            IrCondition cond = conditionOp(inst.c);
+            CODEGEN_ASSERT(cond == IrCondition::Equal || cond == IrCondition::NotEqual);
+
+            if (cond == IrCondition::Equal)
+                substitute(function, inst, build.constInt(function.tagOp(inst.a) == function.tagOp(inst.b) ? 1 : 0));
+            else
+                substitute(function, inst, build.constInt(function.tagOp(inst.a) != function.tagOp(inst.b) ? 1 : 0));
+        }
+        break;
+    case IrCmd::CMP_SPLIT_TVALUE:
+    {
+        CODEGEN_ASSERT(FFlag::LuauCodegenDirectCompare2);
+        CODEGEN_ASSERT(inst.b.kind == IrOpKind::Constant);
+
+        IrCondition cond = conditionOp(inst.e);
+        CODEGEN_ASSERT(cond == IrCondition::Equal || cond == IrCondition::NotEqual);
+
+        if (cond == IrCondition::Equal)
+        {
+            if (inst.a.kind == IrOpKind::Constant && function.tagOp(inst.a) != function.tagOp(inst.b))
+            {
+                substitute(function, inst, build.constInt(0));
+            }
+            else if (inst.c.kind == IrOpKind::Constant && inst.d.kind == IrOpKind::Constant)
+            {
+                // If the tag is a constant, this means previous condition has failed because tags are the same
+                bool knownSameTag = inst.a.kind == IrOpKind::Constant;
+                bool sameValue = false;
+
+                if (function.tagOp(inst.b) == LUA_TBOOLEAN)
+                    sameValue = compare(function.intOp(inst.c), function.intOp(inst.d), IrCondition::Equal);
+                else if (function.tagOp(inst.b) == LUA_TNUMBER)
+                    sameValue = compare(function.doubleOp(inst.c), function.doubleOp(inst.d), IrCondition::Equal);
+                else
+                    CODEGEN_ASSERT(!"unsupported type");
+
+                if (knownSameTag && sameValue)
+                    substitute(function, inst, build.constInt(1));
+                else if (sameValue)
+                    replace(function, block, index, {IrCmd::CMP_TAG, inst.a, inst.b, inst.e});
+                else
+                    substitute(function, inst, build.constInt(0));
+            }
+        }
+        else
+        {
+            if (inst.a.kind == IrOpKind::Constant && function.tagOp(inst.a) != function.tagOp(inst.b))
+            {
+                substitute(function, inst, build.constInt(1));
+            }
+            else if (inst.c.kind == IrOpKind::Constant && inst.d.kind == IrOpKind::Constant)
+            {
+                // If the tag is a constant, this means previous condition has failed because tags are the same
+                bool knownSameTag = inst.a.kind == IrOpKind::Constant;
+                bool differentValue = false;
+
+                if (function.tagOp(inst.b) == LUA_TBOOLEAN)
+                    differentValue = compare(function.intOp(inst.c), function.intOp(inst.d), IrCondition::NotEqual);
+                else if (function.tagOp(inst.b) == LUA_TNUMBER)
+                    differentValue = compare(function.doubleOp(inst.c), function.doubleOp(inst.d), IrCondition::NotEqual);
+                else
+                    CODEGEN_ASSERT(!"unsupported type");
+
+                if (differentValue)
+                    substitute(function, inst, build.constInt(1));
+                else if (knownSameTag)
+                    substitute(function, inst, build.constInt(0));
+                else
+                    replace(function, block, index, {IrCmd::CMP_TAG, inst.a, inst.b, inst.e});
+            }
+        }
+    }
         break;
     case IrCmd::JUMP_EQ_TAG:
         if (inst.a.kind == IrOpKind::Constant && inst.b.kind == IrOpKind::Constant)

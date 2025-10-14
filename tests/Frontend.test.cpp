@@ -16,6 +16,7 @@ using namespace Luau;
 LUAU_FASTFLAG(LuauSolverV2);
 LUAU_FASTFLAG(DebugLuauFreezeArena)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
+LUAU_FASTFLAG(LuauBatchedExecuteTask)
 
 namespace
 {
@@ -55,10 +56,17 @@ struct NaiveFileResolver : NullFileResolver
 
 struct FrontendFixture : BuiltinsFixture
 {
-    FrontendFixture()
+    FrontendFixture() = default;
+
+    Frontend& getFrontend() override
     {
-        addGlobalBinding(getFrontend().globals, "game", getBuiltins()->anyType, "@test");
-        addGlobalBinding(getFrontend().globals, "script", getBuiltins()->anyType, "@test");
+        if (frontend)
+            return *frontend;
+
+        Frontend& f = BuiltinsFixture::getFrontend();
+        addGlobalBinding(f.globals, "game", f.builtinTypes->anyType, "@test");
+        addGlobalBinding(f.globals, "script", f.builtinTypes->anyType, "@test");
+        return *frontend;
     }
 };
 
@@ -136,10 +144,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "automatically_check_dependent_scripts")
     auto bExports = first(bModule->returnType);
     REQUIRE(!!bExports);
 
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("{ b_value: number }", toString(*bExports));
-    else
-        CHECK_EQ("{| b_value: number |}", toString(*bExports));
+    CHECK_EQ("{ b_value: number }", toString(*bExports));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "automatically_check_cyclically_dependent_scripts")
@@ -283,10 +288,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "nocheck_cycle_used_by_checked")
     std::optional<TypeId> cExports = first(cModule->returnType);
     REQUIRE(bool(cExports));
 
-    if (FFlag::LuauSolverV2)
-        CHECK("{ a: { hello: any }, b: { hello: any } }" == toString(*cExports));
-    else
-        CHECK("{| a: {| hello: any |}, b: {| hello: any |} |}" == toString(*cExports));
+    CHECK("{ a: { hello: any }, b: { hello: any } }" == toString(*cExports));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "cycle_detection_disabled_in_nocheck")
@@ -457,32 +459,20 @@ return {mod_b = 2}
     LUAU_REQUIRE_ERRORS(resultB);
 
     TypeId tyB = requireExportedType("game/B", "btype");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(tyB, opts), "{ x: number }");
-    else
-        CHECK_EQ(toString(tyB, opts), "{| x: number |}");
+    CHECK_EQ(toString(tyB, opts), "{ x: number }");
 
     TypeId tyA = requireExportedType("game/A", "atype");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(tyA, opts), "{ x: any }");
-    else
-        CHECK_EQ(toString(tyA, opts), "{| x: any |}");
+    CHECK_EQ(toString(tyA, opts), "{ x: any }");
 
     getFrontend().markDirty("game/B");
     resultB = getFrontend().check("game/B");
     LUAU_REQUIRE_ERRORS(resultB);
 
     tyB = requireExportedType("game/B", "btype");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(tyB, opts), "{ x: number }");
-    else
-        CHECK_EQ(toString(tyB, opts), "{| x: number |}");
+    CHECK_EQ(toString(tyB, opts), "{ x: number }");
 
     tyA = requireExportedType("game/A", "atype");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(tyA, opts), "{ x: any }");
-    else
-        CHECK_EQ(toString(tyA, opts), "{| x: any |}");
+    CHECK_EQ(toString(tyA, opts), "{ x: any }");
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "dont_reparse_clean_file_when_linting")
@@ -555,10 +545,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "recheck_if_dependent_script_is_dirty")
     auto bExports = first(bModule->returnType);
     REQUIRE(!!bExports);
 
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("{ b_value: string }", toString(*bExports));
-    else
-        CHECK_EQ("{| b_value: string |}", toString(*bExports));
+    CHECK_EQ("{ b_value: string }", toString(*bExports));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "mark_non_immediate_reverse_deps_as_dirty")
@@ -899,7 +886,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_f
     }
     else
         REQUIRE_EQ(
-            "Table type 'a' not compatible with type '{| Count: number |}' because the former is missing field 'Count'", toString(result.errors[0])
+            "Table type 'a' not compatible with type '{ Count: number }' because the former is missing field 'Count'", toString(result.errors[0])
         );
 }
 
@@ -1748,6 +1735,8 @@ TEST_CASE_FIXTURE(FrontendFixture, "test_invalid_dependency_tracking_per_module_
 
 TEST_CASE_FIXTURE(FrontendFixture, "queue_check_simple")
 {
+    ScopedFastFlag luauBatchedExecuteTask{FFlag::LuauBatchedExecuteTask, true};
+
     fileResolver.source["game/Gui/Modules/A"] = R"(
         --!strict
         return {hello=5, world=true}
@@ -1769,6 +1758,8 @@ TEST_CASE_FIXTURE(FrontendFixture, "queue_check_simple")
 
 TEST_CASE_FIXTURE(FrontendFixture, "queue_check_cycle_instant")
 {
+    ScopedFastFlag luauBatchedExecuteTask{FFlag::LuauBatchedExecuteTask, true};
+
     fileResolver.source["game/Gui/Modules/A"] = R"(
         --!strict
         local Modules = game:GetService('Gui').Modules
@@ -1794,6 +1785,8 @@ TEST_CASE_FIXTURE(FrontendFixture, "queue_check_cycle_instant")
 
 TEST_CASE_FIXTURE(FrontendFixture, "queue_check_cycle_delayed")
 {
+    ScopedFastFlag luauBatchedExecuteTask{FFlag::LuauBatchedExecuteTask, true};
+
     fileResolver.source["game/Gui/Modules/C"] = R"(
         --!strict
         return {c_value = 5}
@@ -1825,6 +1818,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "queue_check_cycle_delayed")
 
 TEST_CASE_FIXTURE(FrontendFixture, "queue_check_propagates_ice")
 {
+    ScopedFastFlag luauBatchedExecuteTask{FFlag::LuauBatchedExecuteTask, true};
     ScopedFastFlag sffs{FFlag::DebugLuauMagicTypes, true};
 
     ModuleName mm = fromString("MainModule");
