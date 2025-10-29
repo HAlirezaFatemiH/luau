@@ -69,9 +69,11 @@ target_sources(Luau.Compiler PRIVATE
 target_sources(Luau.Config PRIVATE
     Config/include/Luau/Config.h
     Config/include/Luau/LinterConfig.h
+    Config/include/Luau/LuauConfig.h
 
     Config/src/Config.cpp
     Config/src/LinterConfig.cpp
+    Config/src/LuauConfig.cpp
 )
 
 if(NOT LUAU_DISABLE_CODEGEN)
@@ -187,6 +189,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Constraint.h
     Analysis/include/Luau/ConstraintGenerator.h
     Analysis/include/Luau/ConstraintSet.h
+    Analysis/include/Luau/NativeStackGuard.h
     Analysis/include/Luau/ConstraintSolver.h
     Analysis/include/Luau/ControlFlow.h
     Analysis/include/Luau/DataFlowGraph.h
@@ -282,6 +285,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/FragmentAutocomplete.cpp
     Analysis/src/Frontend.cpp
     Analysis/src/Generalization.cpp
+    Analysis/src/NativeStackGuard.cpp
     Analysis/src/GlobalTypes.cpp
     Analysis/src/InferPolarity.cpp
     Analysis/src/Instantiation.cpp
@@ -295,6 +299,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/Normalize.cpp
     Analysis/src/OverloadResolution.cpp
     Analysis/src/Quantify.cpp
+    Analysis/src/RecursionCounter.cpp
     Analysis/src/Refinement.cpp
     Analysis/src/RequireTracer.cpp
     Analysis/src/Scope.cpp
